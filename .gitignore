@@ -1,0 +1,53 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.local.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# local SQLite database — see lib/db/path.ts. The real file lives outside this
+# repo by default (~/.unimanager/) because OneDrive syncs this folder and file
+# sync corrupts live SQLite files and their -wal/-shm sidecars.
+/data
+*.db
+*.db-shm
+*.db-wal
+
+# impeccable ships a 15MB platform binary that its launcher re-downloads on demand
+.claude/skills/impeccable/scripts/bin/
