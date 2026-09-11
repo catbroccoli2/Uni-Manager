@@ -249,6 +249,43 @@ check(
 );
 check('overdue survives the narrow window', narrowText.includes('Overdue'));
 
+// --- Export (PRD §6.6) -----------------------------------------------------
+{
+  const res = await page.request.get(`${BASE}/api/export`);
+  check('export responds 200', res.status() === 200, String(res.status()));
+  check(
+    'export is served as a dated download',
+    /attachment; filename="uni-manager-\d{4}-\d{2}-\d{2}\.json"/.test(
+      res.headers()['content-disposition'] ?? '',
+    ),
+    res.headers()['content-disposition'],
+  );
+
+  const data = JSON.parse(await res.text());
+  check('export carries a schema version', data.schemaVersion === 1);
+  check(
+    'export includes every table, Phase 2 ones included',
+    ['semesters', 'units', 'assessments', 'contentSources', 'timetableEntries', 'gradeBands'].every(
+      (k) => Array.isArray(data[k]),
+    ),
+  );
+  check(
+    'export round-trips real rows',
+    data.semesters.length >= 2 && data.units.length >= 3 && data.assessments.length >= 11,
+    `${data.semesters.length} semesters, ${data.units.length} units, ${data.assessments.length} assessments`,
+  );
+  // The values must survive as their real types, not stringified.
+  const graded = data.assessments.find((a) => a.completed === true && a.mark !== null);
+  check(
+    'export preserves types (boolean completed, numeric mark, ISO date)',
+    typeof graded?.completed === 'boolean' &&
+      typeof graded?.mark === 'number' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(graded?.dueDate ?? ''),
+    JSON.stringify({ completed: graded?.completed, mark: graded?.mark, dueDate: graded?.dueDate }),
+  );
+  check('export includes the grade bands', data.gradeBands.length === 5);
+}
+
 // --- Clean up before capturing --------------------------------------------
 // Removing the rows this run created BEFORE the screenshots, so the captures
 // show the real app rather than "E2E Unit 1789122326492" sitting in a bay.
@@ -274,6 +311,7 @@ for (const [name, url] of [
   ['semesters', `${BASE}/semesters`],
   ['semester-detail', `${BASE}/semesters/1`],
   ['unit', `${BASE}/units/1`],
+  ['settings', `${BASE}/settings`],
 ]) {
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.screenshot({ path: `${OUT}/${name}-desktop.png`, fullPage: true });
