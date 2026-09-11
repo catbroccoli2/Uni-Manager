@@ -1,88 +1,46 @@
 'use client';
 
-import { useCallback, useOptimistic, useRef, useState, useTransition } from 'react';
-import {
-  createAssessment,
-  deleteAssessment,
-  updateAssessment,
-  type AssessmentPatch,
-} from '@/app/units/assessment-actions';
+import { useRef, useState, type RefObject } from 'react';
 import { ASSESSMENT_TYPES, type Assessment, type AssessmentType } from '@/db/schema';
 import { describeDueDate, dueUrgency } from '@/lib/dates';
 import { Button } from '@/components/ui';
+import type { Patchable } from '@/components/unit-workspace';
 
 /**
- * The rack: one buff strip per assessment, seated in bays.
+ * The rack: one buff strip per assessment.
  *
  * Editing model, confirmed with the user: every cell is always live. Type, then
  * leave the field or press Enter and it saves. Escape reverts the cell. There
  * is no save button anywhere, because the Notion table this replaces does not
  * have one and PRD.md §6.2 measures this against that table.
  *
- * Writes are optimistic. `useOptimistic` shows the typed value immediately and
- * React discards the overlay once the Server Action's `revalidatePath` sends
- * fresh server state down — so a slow disk never blocks the next keystroke, and
- * a rejected write corrects itself rather than leaving the UI lying.
+ * State and mutations live in UnitWorkspace, not here, because the grade gauge
+ * has to read the same optimistic rows — typing a mark must move the gauge on
+ * the same keystroke.
+ *
+ * A deliberate departure from the direction contract, which called for separate
+ * CLEARED and PENDING bays: strips stay in one bay in outline order, because
+ * moving a row the instant it is ticked fights the fast-entry flow §6.2 puts
+ * first. The distinction is carried by the stock instead — clean buff is
+ * written on, hatched is blank — so a strip's material states its bay.
  */
-
-type Patchable = Omit<AssessmentPatch, 'id'>;
-
 export function AssessmentRack({
-  unitId,
-  assessments,
+  rows,
+  pending,
+  error,
+  focusOnMount,
+  onSave,
+  onAdd,
+  onRemove,
 }: {
-  unitId: number;
-  assessments: Assessment[];
+  rows: Assessment[];
+  pending: boolean;
+  error: string | null;
+  focusOnMount: RefObject<number | null>;
+  onSave: (id: number, patch: Patchable) => void;
+  onAdd: () => void;
+  onRemove: (id: number) => void;
 }) {
-  const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-
-  // The optimistic overlay: a patch keyed by row id, plus rows added this tick.
-  const [rows, applyOptimistic] = useOptimistic(
-    assessments,
-    (current: Assessment[], change: { id: number; patch: Patchable } | { added: Assessment }) => {
-      if ('added' in change) return [...current, change.added];
-      return current.map((row) =>
-        row.id === change.id ? ({ ...row, ...change.patch } as Assessment) : row,
-      );
-    },
-  );
-
-  /** Focus the name field of a row as soon as it exists in the DOM. */
-  const focusOnMount = useRef<number | null>(null);
-
-  const save = useCallback(
-    (id: number, patch: Patchable) => {
-      setError(null);
-      startTransition(async () => {
-        applyOptimistic({ id, patch });
-        const result = await updateAssessment({ id, ...patch });
-        if (!result.ok) setError(result.error);
-      });
-    },
-    [applyOptimistic],
-  );
-
-  const addRow = useCallback(() => {
-    setError(null);
-    startTransition(async () => {
-      const result = await createAssessment(unitId);
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      focusOnMount.current = result.assessment.id;
-    });
-  }, [unitId]);
-
-  const removeRow = useCallback((id: number) => {
-    setError(null);
-    startTransition(async () => {
-      const result = await deleteAssessment(id);
-      if (!result.ok) setError(result.error);
-    });
-  }, []);
-
   const totalWeighting = rows.reduce((sum, row) => sum + row.weighting, 0);
 
   return (
@@ -95,7 +53,7 @@ export function AssessmentRack({
             No assessments on this rack yet. Add the first one from the unit outline.
           </p>
           <div className="mt-3.5 flex justify-center">
-            <Button type="button" variant="primary" onClick={addRow} disabled={pending}>
+            <Button type="button" variant="primary" onClick={onAdd} disabled={pending}>
               Add a strip
             </Button>
           </div>
@@ -106,9 +64,9 @@ export function AssessmentRack({
             <Strip
               key={row.id}
               row={row}
-              onSave={save}
-              onDelete={removeRow}
-              onAppend={addRow}
+              onSave={onSave}
+              onDelete={onRemove}
+              onAppend={onAdd}
               autoFocus={focusOnMount.current === row.id}
               onFocused={() => {
                 focusOnMount.current = null;
@@ -120,7 +78,7 @@ export function AssessmentRack({
 
       {rows.length > 0 ? (
         <div className="flex items-center gap-3 pt-1">
-          <Button type="button" onClick={addRow} disabled={pending}>
+          <Button type="button" onClick={onAdd} disabled={pending}>
             Add a strip
           </Button>
           <span className="text-xs text-etch-faint">

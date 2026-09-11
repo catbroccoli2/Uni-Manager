@@ -151,6 +151,82 @@ await page.waitForFunction(
 );
 check('remove deletes the row', true);
 
+// --- The grade calculator (PRD §7) ----------------------------------------
+// Unit 1 seeded: graded 10@8.5 + 40@36.8 = 45.3 banked over 50 weight;
+// 20 + 30 = 50 outstanding. Hand-computed expectations below.
+await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
+const gauge = () => page.locator('section', { hasText: 'Where this unit stands' }).first();
+
+const banked = (await gauge().textContent()) ?? '';
+check('gauge reports the banked total', banked.includes('45.3'), 'expected 45.3');
+check('gauge reports the floor-to-ceiling range', banked.includes('45.3–95.3'));
+check('gauge reports the average so far', banked.includes('90.6'), 'expected 90.6%');
+check('gauge reports outstanding weight', banked.includes('50'));
+
+// Target D (70): needs 70 - 45.3 = 24.7 from 50 remaining = 49.4%.
+await page.getByRole('button', { name: 'D', exact: true }).click();
+await page.waitForTimeout(200);
+const atD = (await gauge().textContent()) ?? '';
+check('achievable target computes the needed average', atD.includes('49.4'), 'expected 49.4%');
+
+// Target HD (80): needs 80 - 45.3 = 34.7 from 50 = 69.4%. Still achievable.
+await page.getByRole('button', { name: 'HD', exact: true }).click();
+await page.waitForTimeout(200);
+const atHD = (await gauge().textContent()) ?? '';
+check('HD target computes the needed average', atHD.includes('69.4'), 'expected 69.4%');
+
+// Target 96: above the 95.3 ceiling, so §7's "impossible" must fire.
+await page.getByLabel('Target percentage').last().fill('96');
+await page.waitForTimeout(300);
+const at96 = (await gauge().textContent()) ?? '';
+check('unreachable target is flagged as out of reach', at96.includes('Out of reach'));
+check('out-of-reach names the best possible', at96.includes('95.3'));
+
+// Target 40: already below the 45.3 floor, so §7's "already guaranteed".
+await page.getByLabel('Target percentage').last().fill('40');
+await page.waitForTimeout(300);
+const at40 = (await gauge().textContent()) ?? '';
+check('banked target is flagged as locked in', at40.includes('Already locked in'));
+
+// Unit 3 is fully graded (24 + 17 + 34 = 75), so the locked paths must render
+// and nothing may divide by zero.
+await page.goto(`${BASE}/units/3`, { waitUntil: 'networkidle' });
+await page.getByRole('button', { name: 'D', exact: true }).click();
+await page.waitForTimeout(250);
+const settled = (await gauge().textContent()) ?? '';
+check('fully graded unit shows a final score', settled.includes('75'));
+check('fully graded unit reports a met target as final', settled.includes('Final'));
+check('no Infinity or NaN when nothing remains', !/Infinity|NaN/.test(settled), settled.slice(0, 90));
+
+// Unit 2's weightings sum to 85, so §7's warning must be visible.
+await page.goto(`${BASE}/units/2`, { waitUntil: 'networkidle' });
+const warned = (await gauge().textContent()) ?? '';
+check('weightings not summing to 100 warns', warned.includes('Weightings total 85'));
+check('warning says figures are still out of 100', warned.includes('out of 100'));
+
+// --- Editable grade bands --------------------------------------------------
+await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' });
+await page.getByLabel('High Distinction threshold').fill('85');
+await page.getByRole('button', { name: 'Save bands' }).click();
+await page.waitForTimeout(900);
+await page.reload({ waitUntil: 'networkidle' });
+const hd = await page.getByLabel('High Distinction threshold').inputValue();
+check('grade band threshold persists', hd === '85', hd);
+
+// The edited band must reach the calculator, not just the settings page.
+await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
+const withEdited = (await gauge().textContent()) ?? '';
+check('edited band reaches the calculator', withEdited.includes('85'), 'HD should now read 85');
+
+await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' });
+await page.getByRole('button', { name: 'Restore defaults' }).click();
+await page.waitForTimeout(900);
+await page.reload({ waitUntil: 'networkidle' });
+check(
+  'restore defaults puts HD back to 80',
+  (await page.getByLabel('High Distinction threshold').inputValue()) === '80',
+);
+
 // --- The board -------------------------------------------------------------
 await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
 const boardText = (await page.locator('body').textContent()) ?? '';

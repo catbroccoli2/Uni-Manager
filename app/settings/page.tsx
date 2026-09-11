@@ -1,8 +1,12 @@
-import { BayLabel, EmptyBay } from '@/components/ui';
+import { listGradeBands } from '@/lib/queries';
+import { BayLabel } from '@/components/ui';
+import { BandEditor } from './band-editor';
 
 export const dynamic = 'force-dynamic';
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  const bands = await listGradeBands();
+
   return (
     <div className="space-y-8">
       <div>
@@ -13,8 +17,12 @@ export default function SettingsPage() {
       </div>
 
       <section>
-        <BayLabel>Grade bands</BayLabel>
-        <EmptyBay>Editable bands land with the grade calculator.</EmptyBay>
+        <BayLabel trailing="Australian defaults">Grade bands</BayLabel>
+        <p className="mb-3 max-w-prose text-sm text-etch-dim">
+          Only each band&rsquo;s floor is editable. Its ceiling is derived from the band above, so a
+          score can never fall between two bands or match both.
+        </p>
+        <BandEditor bands={bands} />
       </section>
     </div>
   );

@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getUnit } from '@/lib/queries';
+import { getUnit, listGradeBands } from '@/lib/queries';
 import { UnitPlate } from '@/components/unit-pill';
 import { BayLabel } from '@/components/ui';
-import { AssessmentRack } from '@/components/assessment-rack';
+import { UnitWorkspace } from '@/components/unit-workspace';
 import { UnitSettings } from './unit-settings';
 
 export const dynamic = 'force-dynamic';
@@ -13,7 +13,7 @@ export default async function UnitPage({ params }: PageProps<'/units/[id]'>) {
   const unitId = Number(id);
   if (!Number.isInteger(unitId)) notFound();
 
-  const unit = await getUnit(unitId);
+  const [unit, bands] = await Promise.all([getUnit(unitId), listGradeBands()]);
   if (!unit) notFound();
 
   return (
@@ -31,18 +31,12 @@ export default async function UnitPage({ params }: PageProps<'/units/[id]'>) {
         </div>
       </div>
 
-      <section>
-        <BayLabel
-          trailing={
-            unit.assessments.length > 0
-              ? `${unit.assessments.filter((a) => a.completed).length} of ${unit.assessments.length} graded`
-              : undefined
-          }
-        >
-          Assessments
-        </BayLabel>
-        <AssessmentRack unitId={unit.id} assessments={unit.assessments} />
-      </section>
+      {/*
+        The gauge and the rack are one client component, not two: they read the
+        same optimistic rows so that typing a mark moves the gauge on the same
+        keystroke. Bands come from the database, per CLAUDE.md — never hardcoded.
+      */}
+      <UnitWorkspace unitId={unit.id} assessments={unit.assessments} bands={bands} />
 
       <section>
         <BayLabel>Unit details</BayLabel>
