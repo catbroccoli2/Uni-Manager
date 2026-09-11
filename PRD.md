@@ -44,12 +44,24 @@ Mirrors your reference table's columns directly:
 - `name` (e.g. "Assessment 1: Online Test")
 - `date` (due date)
 - `type`: Individual / Group / Team-based (extensible enum)
-- `weighting` (% of the unit's final grade — e.g. 10, 40, 7.5)
-- `mark` (points earned, on the same scale as `weighting` — e.g. weighting 40, mark 36.8 means a 92% raw score)
+- `weighting` (% of the unit's final grade — e.g. 10, 40, 7.5). Weightings across a unit cannot exceed 100; entry is capped rather than warned about afterwards.
+- `mark` (raw marks earned, exactly as the marksheet states them — e.g. 18)
+- `max_mark` (what `mark` is out of — e.g. 25; defaults to 100 so a plain percentage can be typed straight in)
 - `completed` (boolean — your "checkbox" column; true once graded)
 - `notes` (optional free text)
 
-**Note on `mark`:** stored as weighted points earned, not raw %, matching your original table. Raw % is derived wherever needed as `mark / weighting * 100` — nothing is lost by storing it this way.
+**Note on `mark` — revised.** This originally specified `mark` as *weighted points
+earned*, so a 40%-weighted assessment scored 92% was stored as `36.8`. That was
+changed after using the app: real assignments come back as "18 / 25", and
+converting each one by hand before typing it defeats the point of the app doing
+the weighting. `mark` and `max_mark` now hold what the marksheet says, and the
+weighted contribution is derived as `(mark / max_mark) * weighting` — so an
+assessment worth 50% marked out of 10 makes every mark worth 5 of the final
+grade. Raw % is `mark / max_mark * 100`.
+
+The migration that introduced `max_mark` backfilled it with each row's
+`weighting`, which makes the new formula collapse to the old stored value, so no
+existing figure changed.
 
 ### Content source
 - `id`, `unit_id` (FK)

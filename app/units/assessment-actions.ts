@@ -5,6 +5,7 @@ import { asc, eq, sql } from 'drizzle-orm';
 import { db, ensureDatabaseReady } from '@/lib/db';
 import { ASSESSMENT_TYPES, assessments, type Assessment, type AssessmentType } from '@/db/schema';
 import { isValidIsoDate } from '@/lib/dates';
+import { weightingAllowance } from '@/lib/grades';
 import type { ActionResult } from '@/lib/form';
 
 /**
@@ -21,6 +22,7 @@ export interface AssessmentPatch {
   type?: AssessmentType;
   weighting?: number;
   mark?: number | null;
+  maxMark?: number;
   completed?: boolean;
   notes?: string | null;
 }
@@ -45,14 +47,23 @@ function clean(patch: AssessmentPatch): Partial<Assessment> {
 
   if (patch.weighting !== undefined) {
     // Guard against NaN and Infinity reaching a REAL column, where they would
-    // poison every sum the calculator runs afterwards.
-    next.weighting = Number.isFinite(patch.weighting) ? patch.weighting : 0;
+    // poison every sum the calculator runs afterwards. The 100 ceiling is
+    // enforced against the unit's other rows in `updateAssessment`, which is
+    // the only place that can see them.
+    next.weighting = Number.isFinite(patch.weighting) ? Math.max(0, patch.weighting) : 0;
   }
 
   if (patch.mark !== undefined) {
     // null is meaningful: "not graded yet" is different from a mark of 0.
     next.mark =
-      patch.mark === null || !Number.isFinite(patch.mark) ? null : patch.mark;
+      patch.mark === null || !Number.isFinite(patch.mark) ? null : Math.max(0, patch.mark);
+  }
+
+  if (patch.maxMark !== undefined) {
+    // A zero or negative "out of" is not a scale. Falling back to 100 keeps the
+    // row scoring something sensible rather than silently contributing nothing.
+    next.maxMark =
+      Number.isFinite(patch.maxMark) && patch.maxMark > 0 ? patch.maxMark : 100;
   }
 
   if (patch.completed !== undefined) next.completed = patch.completed;
@@ -71,6 +82,31 @@ export async function updateAssessment(patch: AssessmentPatch): Promise<ActionRe
 
     const next = clean(patch);
     if (Object.keys(next).length === 0) return { ok: true };
+
+    /*
+      The 100% ceiling is enforced here rather than in the client alone. The
+      client clamps so the user sees what happened as they type, but it is one
+      tab among possibly several and its idea of the other rows can be stale;
+      the database is the only place that knows the current total. Re-clamping
+      against freshly read siblings is what actually makes the invariant hold.
+    */
+    if (next.weighting !== undefined) {
+      const [row] = await db
+        .select({ unitId: assessments.unitId })
+        .from(assessments)
+        .where(eq(assessments.id, patch.id))
+        .limit(1);
+
+      if (row) {
+        const siblings = await db
+          .select({ id: assessments.id, weighting: assessments.weighting })
+          .from(assessments)
+          .where(eq(assessments.unitId, row.unitId));
+
+        const allowance = weightingAllowance(siblings.filter((s) => s.id !== patch.id));
+        next.weighting = Math.min(next.weighting, allowance);
+      }
+    }
 
     const [updated] = await db
       .update(assessments)

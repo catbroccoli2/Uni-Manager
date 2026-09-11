@@ -3,6 +3,7 @@
 import { useRef, useState, type RefObject } from 'react';
 import { ASSESSMENT_TYPES, type Assessment, type AssessmentType } from '@/db/schema';
 import { describeDueDate, dueUrgency } from '@/lib/dates';
+import { clampNumber, weightingAllowance } from '@/lib/grades';
 import { Button } from '@/components/ui';
 import type { Patchable } from '@/components/unit-workspace';
 
@@ -42,6 +43,9 @@ export function AssessmentRack({
   onRemove: (id: number) => void;
 }) {
   const totalWeighting = rows.reduce((sum, row) => sum + row.weighting, 0);
+  // Cleared on the next commit, so a cap notice never outlives the edit that
+  // caused it and sit there looking like a standing error.
+  const [capped, setCapped] = useState<string | null>(null);
 
   return (
     <div className="space-y-2">
@@ -64,9 +68,11 @@ export function AssessmentRack({
             <Strip
               key={row.id}
               row={row}
+              allowance={weightingAllowance(rows.filter((other) => other.id !== row.id))}
               onSave={onSave}
               onDelete={onRemove}
               onAppend={onAdd}
+              onCapped={setCapped}
               autoFocus={focusOnMount.current === row.id}
               onFocused={() => {
                 focusOnMount.current = null;
@@ -87,6 +93,12 @@ export function AssessmentRack({
         </div>
       ) : null}
 
+      {capped ? (
+        <p role="status" className="text-xs text-lamp-live">
+          {capped}
+        </p>
+      ) : null}
+
       {error ? (
         <p role="alert" className="text-sm text-lamp-over">
           {error}
@@ -103,7 +115,7 @@ function RackLegend({ count, totalWeighting }: { count: number; totalWeighting: 
   return (
     <div
       aria-hidden
-      className="hidden items-center gap-3 px-3 text-[0.6875rem] font-medium text-etch-faint lg:grid lg:grid-cols-[1.75rem_minmax(0,1fr)_7rem_6.5rem_4.5rem_4.5rem_3.5rem_1.75rem]"
+      className="hidden items-center gap-3 px-3 text-[0.6875rem] font-medium text-etch-faint lg:grid lg:grid-cols-[1.75rem_minmax(0,1fr)_7rem_6rem_5.5rem_5.5rem_3rem_1.75rem]"
     >
       {/*
         Empty spacer spans, not `sr-only` ones. `sr-only` is position:absolute,
@@ -116,10 +128,12 @@ function RackLegend({ count, totalWeighting }: { count: number; totalWeighting: 
       <span>Assessment</span>
       <span>Due</span>
       <span>Type</span>
+      {/* The allowance is shown always, not only when it is wrong: knowing
+          30% is left is what stops you typing 60 in the first place. */}
       <span className={off ? 'text-lamp-live' : undefined}>
-        Weight{off ? ` (${totalWeighting})` : ''}
+        Weight {totalWeighting}/100
       </span>
-      <span>Mark</span>
+      <span>Mark / out of</span>
       <span className="text-right">Raw</span>
       <span />
     </div>
@@ -128,23 +142,29 @@ function RackLegend({ count, totalWeighting }: { count: number; totalWeighting: 
 
 function Strip({
   row,
+  allowance,
   onSave,
   onDelete,
   onAppend,
+  onCapped,
   autoFocus,
   onFocused,
 }: {
   row: Assessment;
+  /** The most this row's weighting may be set to: 100 minus every other row. */
+  allowance: number;
   onSave: (id: number, patch: Patchable) => void;
   onDelete: (id: number) => void;
   onAppend: () => void;
+  onCapped: (message: string | null) => void;
   autoFocus: boolean;
   onFocused: () => void;
 }) {
   const graded = row.completed;
+  // The raw score, now derived from what the assessment was actually out of.
   const rawPercent =
-    row.completed && row.mark !== null && row.weighting > 0
-      ? Math.round((row.mark / row.weighting) * 1000) / 10
+    row.completed && row.mark !== null && row.maxMark > 0
+      ? Math.round((row.mark / row.maxMark) * 1000) / 10
       : null;
 
   const urgency = row.dueDate && !row.completed ? dueUrgency(row.dueDate) : null;
@@ -154,7 +174,7 @@ function Strip({
       className={[
         'strip relative grid items-center gap-x-3 gap-y-2 px-3 py-2',
         'grid-cols-[1.75rem_minmax(0,1fr)_1.75rem]',
-        'lg:grid-cols-[1.75rem_minmax(0,1fr)_7rem_6.5rem_4.5rem_4.5rem_3.5rem_1.75rem] lg:gap-y-0',
+        'lg:grid-cols-[1.75rem_minmax(0,1fr)_7rem_6rem_5.5rem_5.5rem_3rem_1.75rem] lg:gap-y-0',
         graded ? '' : 'strip-pending',
       ].join(' ')}
     >
@@ -224,25 +244,69 @@ function Strip({
         </label>
 
         <label className="flex flex-col gap-0.5 lg:contents">
-          <span className="text-[0.625rem] text-strip-ink-soft lg:hidden">Weight</span>
-          <CellNumber
-            value={row.weighting}
-            ariaLabel="Weighting"
-            min={0}
-            onCommit={(weighting) => onSave(row.id, { weighting: weighting ?? 0 })}
-          />
+          <span className="text-[0.625rem] text-strip-ink-soft lg:hidden">Weight %</span>
+          <span className="lg:block">
+            <CellNumber
+              value={row.weighting}
+              ariaLabel="Weighting, as a percentage of the unit"
+              min={0}
+              max={allowance}
+              onCommit={(weighting) => {
+                const wanted = weighting ?? 0;
+                const capped = clampNumber(wanted, 0, allowance);
+                // Always reported, including the null case. Setting the message
+                // and then letting onSave clear it would mean it never renders:
+                // both updates batch, and the clear would win.
+                onCapped(
+                  capped === wanted
+                    ? null
+                    : allowance === 0
+                      ? 'All 100% is already allocated to other assessments.'
+                      : `Capped at ${allowance}% — that is all the weight left.`,
+                );
+                onSave(row.id, { weighting: capped });
+              }}
+            />
+          </span>
         </label>
 
+        {/*
+          Mark and its "out of" share one cell, so the grid stays at eight
+          columns and the pair reads the way a marksheet writes it: 18 / 25.
+        */}
         <label className="flex flex-col gap-0.5 lg:contents">
           <span className="text-[0.625rem] text-strip-ink-soft lg:hidden">Mark</span>
-          <CellNumber
-            value={row.mark}
-            ariaLabel="Mark, in weighted points"
-            placeholder="—"
-            min={0}
-            onCommit={(mark) => onSave(row.id, { mark })}
-            onEnterOnLast={onAppend}
-          />
+          <span className="flex items-center gap-0.5">
+            <CellNumber
+              value={row.mark}
+              ariaLabel="Mark earned"
+              placeholder="—"
+              min={0}
+              max={row.maxMark}
+              onCommit={(mark) =>
+                onSave(row.id, {
+                  // A mark above what it was out of is kept: bonus marks are
+                  // real, and the calculator warns rather than silently capping.
+                  mark: mark === null ? null : clampNumber(mark, 0, Math.max(mark, row.maxMark)),
+                })
+              }
+            />
+            <span aria-hidden className="text-xs text-strip-ink-soft">
+              /
+            </span>
+            <CellNumber
+              value={row.maxMark}
+              ariaLabel="Mark is out of"
+              align="left"
+              min={0}
+              onCommit={(maxMark) =>
+                // Blank or zero falls back to 100, so a plain percentage keeps
+                // working rather than the row silently scoring nothing.
+                onSave(row.id, { maxMark: maxMark === null || maxMark <= 0 ? 100 : maxMark })
+              }
+              onEnterOnLast={onAppend}
+            />
+          </span>
         </label>
 
         <span className="hidden text-right font-mono text-xs tabular-nums text-strip-ink-soft lg:block">
@@ -385,6 +449,8 @@ function CellNumber({
   ariaLabel,
   placeholder,
   min,
+  max,
+  align = 'right',
   onCommit,
   onEnterOnLast,
 }: {
@@ -392,6 +458,9 @@ function CellNumber({
   ariaLabel: string;
   placeholder?: string;
   min?: number;
+  max?: number;
+  /** The "out of" half of a mark pair sits left so the two hug their slash. */
+  align?: 'left' | 'right';
   onCommit: (next: number | null) => void;
   onEnterOnLast?: () => void;
 }) {
@@ -413,6 +482,7 @@ function CellNumber({
       inputMode="decimal"
       step="any"
       min={min}
+      max={max}
       value={shown}
       aria-label={ariaLabel}
       placeholder={placeholder}
@@ -436,7 +506,7 @@ function CellNumber({
           event.currentTarget.blur();
         }
       }}
-      className={`${CELL} text-right font-mono tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`}
+      className={`${CELL} ${align === 'right' ? 'text-right' : 'text-left'} font-mono tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`}
     />
   );
 }

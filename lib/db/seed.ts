@@ -11,11 +11,11 @@ import type { Database } from './client';
  * resolves to some band and the lookup never returns undefined.
  */
 export const DEFAULT_GRADE_BANDS: readonly NewGradeBand[] = [
-  { code: 'HD', label: 'High Distinction', minScore: 80, sortOrder: 0 },
-  { code: 'D', label: 'Distinction', minScore: 70, sortOrder: 1 },
-  { code: 'C', label: 'Credit', minScore: 60, sortOrder: 2 },
-  { code: 'P', label: 'Pass', minScore: 50, sortOrder: 3 },
-  { code: 'N', label: 'Fail', minScore: 0, sortOrder: 4 },
+  { code: 'HD', label: 'High Distinction', minScore: 80, gradePoint: 4, sortOrder: 0 },
+  { code: 'D', label: 'Distinction', minScore: 70, gradePoint: 3, sortOrder: 1 },
+  { code: 'C', label: 'Credit', minScore: 60, gradePoint: 2, sortOrder: 2 },
+  { code: 'P', label: 'Pass', minScore: 50, gradePoint: 1, sortOrder: 3 },
+  { code: 'N', label: 'Fail', minScore: 0, gradePoint: 0, sortOrder: 4 },
 ];
 
 /**

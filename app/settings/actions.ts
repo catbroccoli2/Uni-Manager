@@ -14,7 +14,7 @@ import type { ActionResult } from '@/lib/form';
  * leaves a gap or an overlap. See the note on `gradeBands` in db/schema.ts.
  */
 export async function updateGradeBands(
-  input: { id: number; minScore: number }[],
+  input: { id: number; minScore: number; gradePoint: number }[],
 ): Promise<ActionResult> {
   try {
     await ensureDatabaseReady();
@@ -22,6 +22,9 @@ export async function updateGradeBands(
     for (const band of input) {
       if (!Number.isFinite(band.minScore) || band.minScore < 0 || band.minScore > 100) {
         return { ok: false, error: 'Thresholds must be between 0 and 100.' };
+      }
+      if (!Number.isFinite(band.gradePoint) || band.gradePoint < 0 || band.gradePoint > 10) {
+        return { ok: false, error: 'Grade points must be between 0 and 10.' };
       }
     }
 
@@ -35,7 +38,7 @@ export async function updateGradeBands(
     for (const band of input) {
       await db
         .update(gradeBands)
-        .set({ minScore: band.minScore })
+        .set({ minScore: band.minScore, gradePoint: band.gradePoint })
         .where(eq(gradeBands.id, band.id));
     }
 

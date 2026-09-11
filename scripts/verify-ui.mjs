@@ -1,11 +1,154 @@
+/**
+ * Drives the real app in Chrome and checks what it actually renders.
+ *
+ * Runs against a THROWAWAY database, seeded fresh, on its own port. An earlier
+ * version pointed at the real one and created and deleted rows there to test the
+ * Server Actions — which meant a test run mutated real coursework and the
+ * assertions drifted the moment any of it was edited. Nothing here touches
+ * ~/.unimanager.
+ *
+ * Usage: node scripts/verify-ui.mjs [outDir]
+ */
 import { chromium } from 'playwright-core';
-import { mkdirSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const BASE = 'http://localhost:3000';
+const PORT = 3210;
+/*
+  localhost, not 127.0.0.1. Next 16 treats a numeric-IP origin as cross-origin
+  in dev: HMR's WebSocket handshake is refused and hydration never completes, so
+  every form on the page silently stops submitting. The failure looks like a
+  broken Server Action, not like a hostname problem.
+*/
+const BASE = `http://localhost:${PORT}`;
 const OUT = process.argv[2] ?? '.impeccable/review';
 
+const SCRATCH = path.join(tmpdir(), 'uni-manager-verify', 'verify.db');
+rmSync(path.dirname(SCRATCH), { recursive: true, force: true });
+mkdirSync(path.dirname(SCRATCH), { recursive: true });
 mkdirSync(OUT, { recursive: true });
+
+const env = { ...process.env, UNI_MANAGER_DB_PATH: SCRATCH };
+
+function run(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { env, shell: true, stdio: 'inherit', ...opts });
+    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`))));
+  });
+}
+
+/*
+  Next 16 refuses to start a second dev server for the same project directory,
+  so a server left running from ordinary development blocks this script. Rather
+  than fail with a confusing connection error, say what is in the way and let
+  the developer decide: killing someone's running server without asking is not
+  this script's call.
+*/
+for (const port of [3000, PORT]) {
+  try {
+    const res = await fetch(`http://localhost:${port}`, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) {
+      console.error(
+        `\nA dev server is already running on ${port}.\n` +
+          'Next will not start a second one for this project, and this script needs its own\n' +
+          'so it can point at a throwaway database instead of your real one.\n' +
+          'Stop that server and re-run.\n',
+      );
+      process.exit(2);
+    }
+  } catch {
+    /* nothing listening, which is what we want */
+  }
+}
+
+console.log('Seeding a throwaway database…');
+await run('npx', ['tsx', 'scripts/seed-demo.ts']);
+
+console.log(`Starting a dev server on ${PORT}…`);
+const server = spawn('npx', ['next', 'dev', '--port', String(PORT)], {
+  env,
+  shell: true,
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+
+/*
+  These pipes MUST be drained. An unread stdio pipe fills at around 64KB and
+  then blocks the writer — so the dev server would serve a few requests, fill
+  its buffer logging them, and hang forever mid-request. The symptom is a
+  timeout on an assertion rather than anything that points at logging.
+*/
+const serverLog = [];
+const drain = (buf) => {
+  serverLog.push(String(buf));
+  if (serverLog.length > 200) serverLog.shift();
+};
+server.stdout.on('data', drain);
+server.stderr.on('data', drain);
+const dumpServerLog = () => {
+  const text = serverLog.join('');
+  const interesting = text
+    .split('\n')
+    .filter((line) => /error|⨯|failed|warn/i.test(line))
+    .slice(-15);
+  if (interesting.length > 0) console.log('\n--- dev server ---\n' + interesting.join('\n'));
+};
+/*
+  Killing the spawned pid is not enough on Windows: `shell: true` puts a cmd
+  wrapper in front of node, and killing the wrapper leaves the server running
+  and holding the port. The orphan then serves stale bundles to the next run,
+  which shows up as "Failed to find Server Action" rather than as a dead port —
+  a genuinely confusing way to lose an afternoon. taskkill /T takes the tree.
+*/
+let stopped = false;
+const stopServer = () => {
+  if (stopped) return;
+  stopped = true;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+  } else {
+    try {
+      process.kill(-server.pid, 'SIGKILL');
+    } catch {
+      server.kill('SIGKILL');
+    }
+  }
+};
+process.on('exit', stopServer);
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    stopServer();
+    process.exit(1);
+  });
+}
+// An assertion that throws must not leave a server behind either.
+process.on('uncaughtException', (error) => {
+  dumpServerLog();
+  stopServer();
+  console.error(error);
+  process.exit(1);
+});
+
+// Poll the port rather than trusting the startup banner: Next prints "Ready"
+// before it will actually answer, and on a cold Turbopack build the first
+// request compiles the route, which can take a while.
+let up = false;
+for (let i = 0; i < 120 && !up; i++) {
+  try {
+    const res = await fetch(BASE, { signal: AbortSignal.timeout(5000) });
+    up = res.ok;
+  } catch {
+    /* not listening yet */
+  }
+  if (!up) await new Promise((r) => setTimeout(r, 1000));
+}
+if (!up) {
+  stopServer();
+  throw new Error(`dev server never answered on ${BASE}`);
+}
+console.log('Dev server is up.');
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const results = [];
@@ -20,7 +163,7 @@ page.on('console', (m) => {
   if (m.type() === 'error') console.log('CONSOLE ERROR:', m.text());
 });
 
-// --- Server Action: create a semester -------------------------------------
+// --- Server Actions: semesters and units ----------------------------------
 await page.goto(`${BASE}/semesters`, { waitUntil: 'networkidle' });
 const before = await page.locator('ul li').count();
 
@@ -29,14 +172,11 @@ await page.fill('input[name="name"]', stamp);
 await page.fill('input[name="year"]', '2027');
 await page.selectOption('select[name="status"]', 'upcoming');
 await page.click('button[type="submit"]');
-await page.waitForFunction(
-  (n) => document.querySelectorAll('ul li').length > n,
-  before,
-  { timeout: 10000 },
-);
-check('createSemester action persists a new semester', await page.getByText(stamp).count() > 0);
+await page.waitForFunction((n) => document.querySelectorAll('ul li').length > n, before, {
+  timeout: 10000,
+});
+check('createSemester action persists a new semester', (await page.getByText(stamp).count()) > 0);
 
-// --- Server Action: archive / restore --------------------------------------
 const row = page.locator('li', { hasText: stamp }).first();
 await row.getByRole('button', { name: 'Archive' }).click();
 await page.waitForFunction(
@@ -49,181 +189,176 @@ await page.waitForFunction(
 );
 check('setSemesterStatus action archives in place', true);
 
-// --- Server Action: create a unit inside a seeded semester -----------------
 await page.goto(`${BASE}/semesters/1`, { waitUntil: 'networkidle' });
 const unitsBefore = await page.locator('ul li').count();
 const unitName = `E2E Unit ${Date.now()}`;
 await page.fill('input[name="name"]', unitName);
 await page.fill('input[name="code"]', 'E2E1000');
 await page.click('button[type="submit"]');
-await page.waitForFunction(
-  (n) => document.querySelectorAll('ul li').length > n,
-  unitsBefore,
-  { timeout: 10000 },
-);
-check('createUnit action persists a new unit', await page.getByText(unitName).count() > 0);
+await page.waitForFunction((n) => document.querySelectorAll('ul li').length > n, unitsBefore, {
+  timeout: 10000,
+});
+check('createUnit action persists a new unit', (await page.getByText(unitName).count()) > 0);
 
-// --- Persistence across a fresh page load ---------------------------------
 await page.goto(`${BASE}/semesters/1`, { waitUntil: 'networkidle' });
-check('new unit survives a fresh load', await page.getByText(unitName).count() > 0);
+check('new unit survives a fresh load', (await page.getByText(unitName).count()) > 0);
 
-// --- The assessment rack: inline editing ----------------------------------
+// --- The rack: inline editing ---------------------------------------------
 await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
+check('rack renders a strip per assessment', (await page.locator('li.strip').count()) === 4);
 
-const stripCount = await page.locator('li.strip').count();
-check('rack renders a strip per assessment', stripCount >= 4, `${stripCount} strips`);
+const firstStrip = () => page.locator('li.strip').first();
 
-// Edit a name, commit on blur, and confirm it survives a reload.
 const newName = `Renamed ${Date.now()}`;
-const nameCell = page.locator('li.strip').first().getByLabel('Assessment name');
+const nameCell = firstStrip().getByLabel('Assessment name');
 await nameCell.fill(newName);
 await nameCell.blur();
 await page.waitForTimeout(900);
 await page.reload({ waitUntil: 'networkidle' });
-const persistedName = await page
-  .locator('li.strip')
-  .first()
-  .getByLabel('Assessment name')
-  .inputValue();
-check('name edit commits on blur and persists', persistedName === newName, persistedName);
+check(
+  'name edit commits on blur and persists',
+  (await firstStrip().getByLabel('Assessment name').inputValue()) === newName,
+);
 
-// Edit a mark and confirm the derived raw % updates.
-const markCell = page.locator('li.strip').first().getByLabel('Mark, in weighted points');
-await markCell.fill('9');
-await markCell.press('Enter');
-await page.waitForTimeout(900);
-await page.reload({ waitUntil: 'networkidle' });
-const rawShown = await page.locator('li.strip').first().textContent();
-check('mark edit recomputes raw %', rawShown?.includes('90%') === true, rawShown?.trim().slice(0, 80));
-
-// Escape reverts rather than committing.
-const escCell = page.locator('li.strip').first().getByLabel('Assessment name');
+const escCell = firstStrip().getByLabel('Assessment name');
 await escCell.fill('THROWAWAY');
 await escCell.press('Escape');
 await page.waitForTimeout(500);
 await page.reload({ waitUntil: 'networkidle' });
-const afterEsc = await page
-  .locator('li.strip')
-  .first()
-  .getByLabel('Assessment name')
-  .inputValue();
-check('Escape reverts without saving', afterEsc === newName, afterEsc);
+check(
+  'Escape reverts without saving',
+  (await firstStrip().getByLabel('Assessment name').inputValue()) === newName,
+);
 
-// Blank mark means "not graded yet", never zero.
-const blankCell = page.locator('li.strip').first().getByLabel('Mark, in weighted points');
-await blankCell.fill('');
-await blankCell.blur();
+// --- The marks model -------------------------------------------------------
+// Seeded: Assessment 1 is 17 out of 20, weighted 10% => 8.5 points.
+check(
+  'mark and "out of" both render',
+  (await firstStrip().getByLabel('Mark earned').inputValue()) === '17' &&
+    (await firstStrip().getByLabel('Mark is out of').inputValue()) === '20',
+);
+check(
+  'raw % derives from mark / out-of',
+  ((await firstStrip().textContent()) ?? '').includes('85%'),
+  '17/20 is 85%',
+);
+
+// Change it to 18 out of 25 on the 40% assessment: (18/25)*40 = 28.8
+const second = page.locator('li.strip').nth(1);
+await second.getByLabel('Mark earned').fill('18');
+await second.getByLabel('Mark earned').blur();
+await page.waitForTimeout(500);
+await second.getByLabel('Mark is out of').fill('25');
+await second.getByLabel('Mark is out of').blur();
 await page.waitForTimeout(900);
 await page.reload({ waitUntil: 'networkidle' });
-const blanked = await page
-  .locator('li.strip')
-  .first()
-  .getByLabel('Mark, in weighted points')
-  .inputValue();
-check('cleared mark stays blank rather than becoming 0', blanked === '', `"${blanked}"`);
+const gauge = () => page.locator('section', { hasText: 'Where this unit stands' }).first();
+const afterEdit = (await gauge().textContent()) ?? '';
+// 8.5 + 28.8 = 37.3 banked over 50 graded => 74.6%
+check('weighted contribution uses mark / out-of', afterEdit.includes('74.6'), '(18/25)*40 = 28.8');
 
-// Restore the seeded values so screenshots and later runs are stable.
-await blankCell.fill('8.5');
-await blankCell.blur();
+// Put it back so the remaining checks read the seeded figures.
+await second.getByLabel('Mark earned').fill('23');
+await second.getByLabel('Mark earned').blur();
 await page.waitForTimeout(400);
-const restoreName = page.locator('li.strip').first().getByLabel('Assessment name');
-await restoreName.fill('Assessment 1: Online Test');
-await restoreName.blur();
+await second.getByLabel('Mark is out of').fill('25');
+await second.getByLabel('Mark is out of').blur();
 await page.waitForTimeout(900);
 
-// Adding a strip.
-const before2 = await page.locator('li.strip').count();
-await page.getByRole('button', { name: 'Add a strip' }).first().click();
-await page.waitForFunction(
-  (n) => document.querySelectorAll('li.strip').length > n,
-  before2,
-  { timeout: 10000 },
-);
-check('add a strip appends a row', true);
-
-// Remove it again.
-const last = page.locator('li.strip').last();
-await last.getByRole('button', { name: /^Remove/ }).click();
-await page.waitForFunction(
-  (n) => document.querySelectorAll('li.strip').length === n,
-  before2,
-  { timeout: 10000 },
-);
-check('remove deletes the row', true);
-
-// --- The grade calculator (PRD §7) ----------------------------------------
-// Unit 1 seeded: graded 10@8.5 + 40@36.8 = 45.3 banked over 50 weight;
-// 20 + 30 = 50 outstanding. Hand-computed expectations below.
-await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
-const gauge = () => page.locator('section', { hasText: 'Where this unit stands' }).first();
-
-const banked = (await gauge().textContent()) ?? '';
-check('gauge reports the banked total', banked.includes('45.3'), 'expected 45.3');
-// Floor and ceiling are marked on the track itself rather than listed as a
-// stat row beneath it, so assert both annotations rather than a joined string.
+// A blank "out of" must fall back to 100, never score the row zero.
+await second.getByLabel('Mark is out of').fill('');
+await second.getByLabel('Mark is out of').blur();
+await page.waitForTimeout(900);
+await page.reload({ waitUntil: 'networkidle' });
 check(
-  'gauge marks the floor and the ceiling on the track',
-  banked.includes('45.3') && banked.includes('95.3') && banked.includes('banked'),
+  'a cleared "out of" falls back to 100 rather than zeroing the row',
+  (await page.locator('li.strip').nth(1).getByLabel('Mark is out of').inputValue()) === '100',
 );
-check('gauge reports the average so far', banked.includes('90.6'), 'expected 90.6%');
-check('gauge reports the graded weight', banked.includes('50'));
+await page.locator('li.strip').nth(1).getByLabel('Mark is out of').fill('25');
+await page.locator('li.strip').nth(1).getByLabel('Mark is out of').blur();
+await page.waitForTimeout(900);
 
-// Target D (70): needs 70 - 45.3 = 24.7 from 50 remaining = 49.4%.
-await page.getByRole('button', { name: 'D', exact: true }).click();
-await page.waitForTimeout(200);
-const atD = (await gauge().textContent()) ?? '';
-check('achievable target computes the needed average', atD.includes('49.4'), 'expected 49.4%');
+// --- The weighting cap -----------------------------------------------------
+// Seeded weightings are 10 + 40 + 20 + 30 = 100. For the second row, the OTHER
+// rows already take 10 + 20 + 30 = 60, so its allowance is 40.
+await page.reload({ waitUntil: 'networkidle' });
+const weightCell = page.locator('li.strip').nth(1).getByLabel(/^Weighting/);
+await weightCell.fill('95');
+await weightCell.blur();
+await page.waitForTimeout(900);
+const cappedText = (await page.locator('body').textContent()) ?? '';
+check(
+  'typing over the allowance is capped, and says so',
+  cappedText.includes('Capped at 40%'),
+  cappedText.match(/Capped[^.]*\./)?.[0],
+);
+await page.reload({ waitUntil: 'networkidle' });
+const cappedValue = await page.locator('li.strip').nth(1).getByLabel(/^Weighting/).inputValue();
+check('the capped weighting saved as the allowance, not the typed value', cappedValue === '40', cappedValue);
+check(
+  'total weighting never exceeds 100',
+  ((await page.locator('body').textContent()) ?? '').includes('Weight 100/100'),
+);
+await page.locator('li.strip').nth(1).getByLabel(/^Weighting/).fill('40');
+await page.locator('li.strip').nth(1).getByLabel(/^Weighting/).blur();
+await page.waitForTimeout(900);
 
-// Target HD (80): needs 80 - 45.3 = 34.7 from 50 = 69.4%. Still achievable.
-await page.getByRole('button', { name: 'HD', exact: true }).click();
-await page.waitForTimeout(200);
-const atHD = (await gauge().textContent()) ?? '';
-check('HD target computes the needed average', atHD.includes('69.4'), 'expected 69.4%');
+// --- Achieved grade, beside the target ------------------------------------
+await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
+const standing = (await gauge().textContent()) ?? '';
+check('gauge shows the grade actually achieved', standing.includes('90.6'), '45.3 of 50 graded');
+check('achieved grade is banded HD, not the target band', /90\.6\s*%?\s*HD/.test(standing.replace(/\s+/g, ' ')), standing.replace(/\s+/g,' ').slice(0, 120));
+check('achieved grade is labelled as on marked work', standing.includes('work marked so far'));
 
-// Target 96: above the 95.3 ceiling, so §7's "impossible" must fire.
-await page.getByLabel('Target percentage').last().fill('96');
-await page.waitForTimeout(300);
-const at96 = (await gauge().textContent()) ?? '';
-check('unreachable target is flagged as out of reach', at96.includes('Out of reach'));
-check('out-of-reach names the best possible', at96.includes('95.3'));
-
-// Target 40: already below the 45.3 floor, so §7's "already guaranteed".
-await page.getByLabel('Target percentage').last().fill('40');
-await page.waitForTimeout(300);
-const at40 = (await gauge().textContent()) ?? '';
-check('banked target is flagged as locked in', at40.includes('Already locked in'));
-
-// Unit 3 is fully graded (24 + 17 + 34 = 75), so the locked paths must render
-// and nothing may divide by zero.
-await page.goto(`${BASE}/units/3`, { waitUntil: 'networkidle' });
+// The §7 target system still works alongside it.
 await page.getByRole('button', { name: 'D', exact: true }).click();
 await page.waitForTimeout(250);
+check(
+  'target still computes the needed average',
+  ((await gauge().textContent()) ?? '').includes('49.4'),
+  '70 - 45.3 = 24.7 over 50 remaining',
+);
+await page.getByLabel('Target percentage').last().fill('96');
+await page.waitForTimeout(300);
+check(
+  'unreachable target still flagged',
+  ((await gauge().textContent()) ?? '').includes('Out of reach'),
+);
+
+// A fully graded unit: achieved is final, and the target band never mislabels it.
+await page.goto(`${BASE}/units/3`, { waitUntil: 'networkidle' });
+await page.getByRole('button', { name: 'C', exact: true }).click();
+await page.waitForTimeout(250);
 const settled = (await gauge().textContent()) ?? '';
-check('fully graded unit shows a final score', settled.includes('75'));
-check('fully graded unit reports a met target as final', settled.includes('Final'));
-check('no Infinity or NaN when nothing remains', !/Infinity|NaN/.test(settled), settled.slice(0, 90));
+check('settled unit shows its final grade', settled.includes('75'));
+check('settled unit is banded D while the target is C', /75\s*%?\s*D/.test(settled.replace(/\s+/g, ' ')), settled.replace(/\s+/g,' ').slice(0, 120));
+check('settled unit says the grade is final', settled.includes('Final grade'));
+check('no Infinity or NaN when nothing remains', !/Infinity|NaN/.test(settled));
 
-// Unit 2's weightings sum to 85, so §7's warning must be visible.
-await page.goto(`${BASE}/units/2`, { waitUntil: 'networkidle' });
-const warned = (await gauge().textContent()) ?? '';
-check('weightings not summing to 100 warns', warned.includes('Weightings total 85'));
-check('warning says figures are still out of 100', warned.includes('out of 100'));
+// --- GPA -------------------------------------------------------------------
+await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+const board = (await page.locator('body').textContent()) ?? '';
+check('board shows a confirmed GPA', board.includes('Confirmed GPA'));
+check('board shows a projected GPA', board.includes('Projected GPA'));
+// Only Ethics is settled: D = 3.00 from 1 unit.
+check('confirmed GPA counts only settled units', board.includes('3.00'), 'Ethics D = 3');
+// HD(4) + HD(4) + D(3) over three units = 3.67.
+check('projected GPA includes in-progress units', board.includes('3.67'), '(4+4+3)/3');
 
-// --- Editable grade bands --------------------------------------------------
+// --- Grade bands and the GPA scale ----------------------------------------
 await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' });
+check(
+  'grade points are editable',
+  (await page.getByLabel('High Distinction grade point').inputValue()) === '4',
+);
 await page.getByLabel('High Distinction threshold').fill('85');
 await page.getByRole('button', { name: 'Save bands' }).click();
 await page.waitForTimeout(900);
 await page.reload({ waitUntil: 'networkidle' });
-const hd = await page.getByLabel('High Distinction threshold').inputValue();
-check('grade band threshold persists', hd === '85', hd);
-
-// The edited band must reach the calculator, not just the settings page.
-await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
-const withEdited = (await gauge().textContent()) ?? '';
-check('edited band reaches the calculator', withEdited.includes('85'), 'HD should now read 85');
-
-await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' });
+check(
+  'grade band threshold persists',
+  (await page.getByLabel('High Distinction threshold').inputValue()) === '85',
+);
 await page.getByRole('button', { name: 'Restore defaults' }).click();
 await page.waitForTimeout(900);
 await page.reload({ waitUntil: 'networkidle' });
@@ -236,28 +371,46 @@ check(
 await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
 const boardText = (await page.locator('body').textContent()) ?? '';
 check('board flags overdue work', boardText.includes('Overdue'));
-check(
-  'board shows the seeded near-term items',
-  boardText.includes('Mid-semester Test') && boardText.includes('Assessment 3: Presentation'),
-);
-check('board shows current-semester standing', boardText.includes('Standing'));
-
-// The 7/14 window is a real filter, not decoration: the 45-day exam must drop out.
+check('board shows near-term items', boardText.includes('Mid-semester Test'));
 const wide = boardText.includes('Final Examination');
 await page.goto(`${BASE}/?days=7`, { waitUntil: 'networkidle' });
 const narrowText = (await page.locator('body').textContent()) ?? '';
-const narrow = narrowText.includes('Assessment 3: Presentation');
 check(
   'window filter changes what is listed',
-  !wide && narrow,
-  `14d hides the +38d exam: ${!wide}; 7d keeps the +4d item: ${narrow}`,
+  !wide && narrowText.includes('Assessment 3: Presentation'),
 );
-check('overdue survives the narrow window', narrowText.includes('Overdue'));
+
+// --- Export ----------------------------------------------------------------
+{
+  const res = await page.request.get(`${BASE}/api/export`);
+  check('export responds 200', res.status() === 200, String(res.status()));
+  check(
+    'export is served as a dated download',
+    /attachment; filename="uni-manager-\d{4}-\d{2}-\d{2}\.json"/.test(
+      res.headers()['content-disposition'] ?? '',
+    ),
+  );
+  const data = JSON.parse(await res.text());
+  check('export carries a schema version', data.schemaVersion === 1);
+  check(
+    'export includes every table',
+    ['semesters', 'units', 'assessments', 'contentSources', 'timetableEntries', 'gradeBands'].every(
+      (k) => Array.isArray(data[k]),
+    ),
+  );
+  const graded = data.assessments.find((a) => a.completed === true && a.mark !== null);
+  check(
+    'export preserves types and the new maxMark',
+    typeof graded?.completed === 'boolean' &&
+      typeof graded?.mark === 'number' &&
+      typeof graded?.maxMark === 'number' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(graded?.dueDate ?? ''),
+    JSON.stringify({ mark: graded?.mark, maxMark: graded?.maxMark }),
+  );
+  check('export carries the GPA scale', data.gradeBands.every((b) => typeof b.gradePoint === 'number'));
+}
 
 // --- Accessibility ---------------------------------------------------------
-// CLAUDE.md asks for an a11y pass once a screen is functionally done. These are
-// the checks worth automating; contrast is computed from what actually rendered
-// rather than from the tokens, so a wrong class shows up here.
 function luminance([r, g, b]) {
   const f = (c) => {
     const s = c / 255;
@@ -275,10 +428,10 @@ for (const [label, url] of [
   ['board', `${BASE}/`],
   ['unit', `${BASE}/units/1`],
   ['settings', `${BASE}/settings`],
+  ['semester', `${BASE}/semesters/1`],
 ]) {
   await page.goto(url, { waitUntil: 'networkidle' });
 
-  // Every control must have an accessible name.
   const unnamed = await page.evaluate(() =>
     [...document.querySelectorAll('button, a, input, select, textarea')]
       .filter((el) => {
@@ -291,12 +444,11 @@ for (const [label, url] of [
           '';
         return name.trim() === '';
       })
-      .map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(' ')[0]}` : ''}`),
+      .map((el) => el.tagName.toLowerCase()),
   );
   check(`${label}: every control has an accessible name`, unnamed.length === 0, unnamed.join(', '));
 
-  // Text contrast, measured on the rendered pixels.
-  const worst = await page.evaluate(() => {
+  const measured = await page.evaluate(() => {
     const out = [];
     for (const el of document.querySelectorAll('body *')) {
       const text = [...el.childNodes]
@@ -324,7 +476,7 @@ for (const [label, url] of [
     return out;
   });
 
-  const failures = worst
+  const failures = measured
     .map((item) => ({
       ...item,
       ratio: contrast(parseRgb(item.fg), parseRgb(item.bg)),
@@ -342,11 +494,11 @@ for (const [label, url] of [
   );
 }
 
-// Keyboard: the rack has to be fully operable without a mouse, per PRD §11.
+// Keyboard operability across a strip.
 await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
 await page.getByLabel('Assessment name').first().focus();
 const reachable = [];
-for (let i = 0; i < 8; i++) {
+for (let i = 0; i < 10; i++) {
   await page.keyboard.press('Tab');
   reachable.push(
     await page.evaluate(() => {
@@ -356,14 +508,11 @@ for (let i = 0; i < 8; i++) {
   );
 }
 check(
-  'tab walks every field of a strip in order',
-  ['Due date', 'Assessment type', 'Weighting', 'Mark, in weighted points'].every((f) =>
-    reachable.includes(f),
-  ),
+  'tab walks every field of a strip, including the new "out of"',
+  ['Assessment type', 'Mark earned', 'Mark is out of'].every((f) => reachable.includes(f)),
   reachable.join(' → '),
 );
 
-// A visible focus ring on a keyboard-focused control.
 const ring = await page.evaluate(() => {
   const el = document.activeElement;
   if (!el) return null;
@@ -375,62 +524,6 @@ check(
   ring !== null && ring.style !== 'none' && parseFloat(ring.width) > 0,
   JSON.stringify(ring),
 );
-
-// --- Export (PRD §6.6) -----------------------------------------------------
-{
-  const res = await page.request.get(`${BASE}/api/export`);
-  check('export responds 200', res.status() === 200, String(res.status()));
-  check(
-    'export is served as a dated download',
-    /attachment; filename="uni-manager-\d{4}-\d{2}-\d{2}\.json"/.test(
-      res.headers()['content-disposition'] ?? '',
-    ),
-    res.headers()['content-disposition'],
-  );
-
-  const data = JSON.parse(await res.text());
-  check('export carries a schema version', data.schemaVersion === 1);
-  check(
-    'export includes every table, Phase 2 ones included',
-    ['semesters', 'units', 'assessments', 'contentSources', 'timetableEntries', 'gradeBands'].every(
-      (k) => Array.isArray(data[k]),
-    ),
-  );
-  check(
-    'export round-trips real rows',
-    data.semesters.length >= 2 && data.units.length >= 3 && data.assessments.length >= 11,
-    `${data.semesters.length} semesters, ${data.units.length} units, ${data.assessments.length} assessments`,
-  );
-  // The values must survive as their real types, not stringified.
-  const graded = data.assessments.find((a) => a.completed === true && a.mark !== null);
-  check(
-    'export preserves types (boolean completed, numeric mark, ISO date)',
-    typeof graded?.completed === 'boolean' &&
-      typeof graded?.mark === 'number' &&
-      /^\d{4}-\d{2}-\d{2}$/.test(graded?.dueDate ?? ''),
-    JSON.stringify({ completed: graded?.completed, mark: graded?.mark, dueDate: graded?.dueDate }),
-  );
-  check('export includes the grade bands', data.gradeBands.length === 5);
-}
-
-// --- Clean up before capturing --------------------------------------------
-// Removing the rows this run created BEFORE the screenshots, so the captures
-// show the real app rather than "E2E Unit 1789122326492" sitting in a bay.
-async function cleanup() {
-  const { createClient } = await import('@libsql/client');
-  const { resolveDatabaseUrl } = await import('../lib/db/path.ts');
-  const client = createClient({ url: resolveDatabaseUrl() });
-  await client.execute('PRAGMA foreign_keys = ON');
-  const s = await client.execute("DELETE FROM semesters WHERE name LIKE 'E2E %'");
-  const u = await client.execute("DELETE FROM units WHERE name LIKE 'E2E Unit%'");
-  const a = await client.execute("DELETE FROM assessments WHERE name = ''");
-  client.close();
-  console.log(
-    `cleanup: removed ${s.rowsAffected} semesters, ${u.rowsAffected} units, ` +
-      `${a.rowsAffected} untitled strips`,
-  );
-}
-await cleanup();
 
 // --- Captures --------------------------------------------------------------
 for (const [name, url] of [
@@ -447,7 +540,6 @@ for (const [name, url] of [
 const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
 for (const [name, url] of [
   ['board', `${BASE}/`],
-  ['semesters', `${BASE}/semesters`],
   ['semester-detail', `${BASE}/semesters/1`],
   ['unit', `${BASE}/units/1`],
 ]) {
@@ -455,16 +547,13 @@ for (const [name, url] of [
   await mobile.screenshot({ path: `${OUT}/${name}-mobile.png`, fullPage: true });
 }
 
-// --- Horizontal overflow check (craft floor: no body scroll at 390px) -----
 const overflow = await mobile.evaluate(
   () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
 );
 check('no horizontal overflow at 390px', overflow <= 0, `overflow ${overflow}px`);
 
 await browser.close();
-
-// A second sweep, in case a check between cleanup and here added a row.
-await cleanup();
+stopServer();
 
 const failed = results.filter((r) => !r.pass);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

@@ -43,10 +43,31 @@ function round(value: number, dp: number = PRECISION_DP): number {
 export interface AssessmentInput {
   /** Percentage of the unit's final grade. Fractional values (7.5) are normal. */
   weighting: number;
-  /** Weighted points earned. null means not graded yet. */
+  /** Raw marks earned, as the marksheet states them. null means not graded yet. */
   mark: number | null;
-  /** True once *graded*, per PRD.md §5 — not merely submitted. */
+  /** What `mark` is out of. 100 when an assessment is reported as a percentage. */
+  maxMark: number;
+  /** True once *graded* — not merely submitted. */
   completed: boolean;
+}
+
+/**
+ * What an assessment actually contributes to the unit, out of 100.
+ *
+ * This is the single place the marks model is applied, which is why nothing
+ * downstream had to change when it moved from weighted-points to raw marks:
+ * every other function in this file works on contributions.
+ *
+ * A non-positive `maxMark` yields 0 rather than Infinity or NaN. "Out of zero"
+ * is not a score, and letting it through would poison every sum after it.
+ */
+export function weightedContribution(assessment: AssessmentInput): number {
+  const { mark, maxMark, weighting } = assessment;
+  if (mark === null || maxMark <= 0) return 0;
+  // Rounded like every other public figure here: (18/25)*40 is
+  // 28.799999999999997 in IEEE-754, and an unrounded contribution would carry
+  // that drift into the running total and out to the band comparison.
+  return round((mark / maxMark) * weighting);
 }
 
 /** A grade band, narrowed to what the calculations need. */
@@ -54,6 +75,11 @@ export interface BandLike {
   code: string;
   label: string;
   minScore: number;
+}
+
+/** A band carrying its GPA value. */
+export interface BandWithPoint extends BandLike {
+  gradePoint: number;
 }
 
 export type GradeWarning =
@@ -65,8 +91,10 @@ export type GradeWarning =
   | { kind: 'weighting-sum-not-100'; totalWeighting: number }
   /** Marked graded but no mark entered. Counted as 0 points, which may be wrong. */
   | { kind: 'completed-without-mark'; indexes: number[] }
-  /** Scored above 100% of the assessment's weight — a typo, or genuine bonus marks. */
-  | { kind: 'mark-exceeds-weighting'; indexes: number[] }
+  /** Scored above what the assessment was out of — a typo, or genuine bonus marks. */
+  | { kind: 'mark-exceeds-max'; indexes: number[] }
+  /** Graded, but "out of" is zero or negative. Contributes nothing; unfixable silently. */
+  | { kind: 'invalid-max-mark'; indexes: number[] }
   | { kind: 'negative-value'; indexes: number[] };
 
 export interface UnitGradeSummary {
@@ -104,11 +132,12 @@ export function summariseUnit(assessments: readonly AssessmentInput[]): UnitGrad
   let weightingRemaining = 0;
 
   const completedWithoutMark: number[] = [];
-  const markExceedsWeighting: number[] = [];
+  const markExceedsMax: number[] = [];
+  const invalidMaxMark: number[] = [];
   const negative: number[] = [];
 
   assessments.forEach((assessment, index) => {
-    const { weighting, mark, completed } = assessment;
+    const { weighting, mark, maxMark, completed } = assessment;
 
     if (weighting < 0 || (mark !== null && mark < 0)) negative.push(index);
 
@@ -116,9 +145,13 @@ export function summariseUnit(assessments: readonly AssessmentInput[]): UnitGrad
       weightingCompleted += weighting;
       if (mark === null) {
         completedWithoutMark.push(index);
+      } else if (maxMark <= 0) {
+        invalidMaxMark.push(index);
       } else {
-        pointsEarned += mark;
-        if (mark > weighting) markExceedsWeighting.push(index);
+        pointsEarned += weightedContribution(assessment);
+        // Counted, not clamped: bonus marks are real, and silently capping a
+        // score the user typed would hide their own data from them.
+        if (mark > maxMark) markExceedsMax.push(index);
       }
     } else {
       weightingRemaining += weighting;
@@ -139,8 +172,11 @@ export function summariseUnit(assessments: readonly AssessmentInput[]): UnitGrad
   if (completedWithoutMark.length > 0) {
     warnings.push({ kind: 'completed-without-mark', indexes: completedWithoutMark });
   }
-  if (markExceedsWeighting.length > 0) {
-    warnings.push({ kind: 'mark-exceeds-weighting', indexes: markExceedsWeighting });
+  if (markExceedsMax.length > 0) {
+    warnings.push({ kind: 'mark-exceeds-max', indexes: markExceedsMax });
+  }
+  if (invalidMaxMark.length > 0) {
+    warnings.push({ kind: 'invalid-max-mark', indexes: invalidMaxMark });
   }
   if (negative.length > 0) {
     warnings.push({ kind: 'negative-value', indexes: negative });
@@ -305,6 +341,95 @@ export function scoreToBand<T extends BandLike>(score: number, bands: readonly T
     }
   }
   return best;
+}
+
+/**
+ * Where a unit actually stands: the grade earned on work that has been marked.
+ *
+ * This is deliberately NOT the running total. A unit with 45.3 of 100 banked
+ * but only 50% graded is averaging 90.6%, and banding the running total would
+ * report that as a fail. The honest answer to "what grade am I getting" is the
+ * grade on what has been graded — and once nothing is outstanding, the two
+ * converge and it becomes final.
+ */
+export interface UnitStanding {
+  /** Grade on marked work, as a percentage. null when nothing is graded. */
+  percent: number | null;
+  band: BandLike | null;
+  /** True once no weight is outstanding, at which point `percent` is final. */
+  settled: boolean;
+}
+
+export function unitStanding(
+  summary: UnitGradeSummary,
+  bands: readonly BandLike[],
+): UnitStanding {
+  const percent = summary.currentAveragePercent;
+  return {
+    percent,
+    band: percent === null ? null : scoreToBand(percent, bands),
+    // An empty unit has nothing outstanding but is not finished, so it needs
+    // something graded before it can be called settled.
+    settled: summary.weightingRemaining <= 0 && summary.weightingCompleted > 0,
+  };
+}
+
+export interface GpaResult {
+  /** null rather than 0 when nothing qualifies: an empty GPA is "not yet". */
+  gpa: number | null;
+  unitCount: number;
+}
+
+/**
+ * Straight average of each unit's band grade point.
+ *
+ * Unweighted by credit points, confirmed with the user — their units all carry
+ * the same credit value, so weighting would add a failure mode (a unit missing
+ * its credit points) for no gain in accuracy.
+ *
+ * Units whose percent is null contribute nothing and are not counted, so a
+ * half-entered semester does not drag the average toward zero.
+ */
+export function gradePointAverage(
+  unitPercents: readonly (number | null)[],
+  bands: readonly BandWithPoint[],
+): GpaResult {
+  let total = 0;
+  let counted = 0;
+
+  for (const percent of unitPercents) {
+    if (percent === null) continue;
+    const band = scoreToBand(percent, bands);
+    if (!band) continue;
+    total += band.gradePoint;
+    counted += 1;
+  }
+
+  return { gpa: counted === 0 ? null : round(total / counted), unitCount: counted };
+}
+
+/**
+ * Clamp helpers.
+ *
+ * These live beside the maths rather than inside event handlers so they can be
+ * tested at their bounds. Every one is applied on commit, never per keystroke:
+ * clamping mid-typing fights the user as they type "50" through "5".
+ */
+export function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return round(Math.min(Math.max(value, min), max));
+}
+
+/**
+ * The most a single assessment's weighting may be set to: whatever is left of
+ * 100 once every other assessment in the unit has taken its share.
+ */
+export function weightingAllowance(
+  others: readonly { weighting: number }[],
+  cap: number = ASSUMED_TOTAL_WEIGHTING,
+): number {
+  const used = others.reduce((sum, other) => sum + Math.max(0, other.weighting), 0);
+  return round(Math.max(0, cap - used));
 }
 
 /**

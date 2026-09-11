@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSemester, getSemesterUnits } from '@/lib/queries';
 import { listGradeBands } from '@/lib/queries';
-import { summariseUnit, scoreToBand } from '@/lib/grades';
+import { summariseUnit, unitStanding } from '@/lib/grades';
 import { BackLink, BayLabel, EmptyBay, Figure, Lamp } from '@/components/ui';
 import { UnitPlate } from '@/components/unit-pill';
 import { UnitComposer } from './unit-composer';
@@ -49,14 +49,14 @@ export default async function SemesterPage({ params }: PageProps<'/semesters/[id
             {units.map((unit) => {
               const summary = summariseUnit(unit.assessments);
               const graded = unit.assessments.filter((a) => a.completed).length;
-              const settled = summary.weightingRemaining <= 0 && unit.assessments.length > 0;
               const weightsOff = summary.warnings.some(
                 (w) => w.kind === 'weighting-sum-not-100',
               );
-              // A band is only meaningful once nothing is outstanding. Mid-semester
-              // the running total is a floor, not a grade: showing "N" beside 45.3
-              // would read as failing a unit being carried at 90%.
-              const band = settled ? scoreToBand(summary.pointsEarned, bands) : null;
+              // The grade on marked work. This used to be hidden until a unit
+              // was finished, because banding the running total showed "N" on a
+              // unit being carried at 90%. Banding the average instead is honest
+              // at every point in the semester.
+              const standing = unitStanding(summary, bands);
 
               return (
                 <li key={unit.id}>
@@ -100,21 +100,23 @@ export default async function SemesterPage({ params }: PageProps<'/semesters/[id
                       </span>
                     </span>
 
-                    <span className="text-xs sm:text-right">
-                      {unit.assessments.length === 0 ? (
-                        <span className="text-etch-faint">no assessments</span>
-                      ) : settled ? (
-                        <Figure className="text-sm text-etch">
-                          {summary.pointsEarned}
-                          {band ? <span className="ml-1.5 text-etch-dim">{band.code}</span> : null}
-                        </Figure>
+                    <span className="flex items-baseline gap-2 text-xs sm:justify-end">
+                      {standing.percent === null ? (
+                        <span className="text-etch-faint">
+                          {unit.assessments.length === 0 ? 'no assessments' : 'nothing graded'}
+                        </span>
                       ) : (
-                        // Floor and ceiling, not a band: the grade is not decided yet.
-                        <Figure className="text-etch-dim">
-                          <span className="text-etch">{summary.worstCase}</span>
-                          <span className="mx-1 text-etch-faint">–</span>
-                          <span className="text-etch">{summary.bestCase}</span>
-                        </Figure>
+                        <>
+                          <Figure className="text-sm text-etch">{standing.percent}%</Figure>
+                          {standing.band ? (
+                            <span className="rounded-[1px] bg-strip px-1.5 py-px text-[0.6875rem] font-semibold text-strip-ink">
+                              {standing.band.code}
+                            </span>
+                          ) : null}
+                          {!standing.settled ? (
+                            <span className="text-[0.625rem] text-etch-faint">so far</span>
+                          ) : null}
+                        </>
                       )}
                     </span>
                   </Link>

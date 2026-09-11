@@ -17,7 +17,7 @@ export default async function SettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 max-w-prose text-sm text-etch-dim">
-          Grade bands and data export.
+          Grade bands, GPA scale, and data export.
         </p>
       </div>
 
@@ -25,7 +25,7 @@ export default async function SettingsPage() {
         <BayLabel trailing="Australian defaults">Grade bands</BayLabel>
         <p className="mb-3 max-w-prose text-sm text-etch-dim">
           Only each band&rsquo;s floor is editable. Its ceiling is derived from the band above, so a
-          score can never fall between two bands or match both.
+          score can never fall between two bands or match both. Grade points set the GPA scale.
         </p>
         <BandEditor bands={bands} />
       </section>

@@ -97,17 +97,35 @@ export const assessments = sqliteTable(
     /** ISO 'YYYY-MM-DD'. Nullable: an assessment can exist before a date is known. */
     dueDate: text('due_date'),
     type: text('type', { enum: ASSESSMENT_TYPES }).notNull().default('individual'),
-    /** Percentage of the unit's final grade. Fractional values (7.5) are expected. */
+    /**
+     * Percentage of the unit's final grade. Fractional values (7.5) are expected.
+     * The weightings across a unit cannot exceed 100 — the rack clamps entry
+     * rather than warning after the fact.
+     */
     weighting: real('weighting').notNull().default(0),
     /**
-     * Weighted points earned, NOT a raw percentage — see PRD.md §5. A weighting of
-     * 40 with a mark of 36.8 is a 92% raw score. Raw % is derived as
-     * `mark / weighting * 100` wherever it is displayed.
+     * Raw marks earned, exactly as the marksheet states them. An assignment
+     * returned as "18 / 25" is `mark: 18, maxMark: 25`.
+     *
+     * This replaced an earlier model where `mark` held weighted points directly
+     * (PRD.md §5 as first written). That forced arithmetic onto the user at
+     * every entry: a 40%-weighted assessment scored 18/25 had to be typed as
+     * 28.8. Storing what the marksheet says and deriving the rest is the whole
+     * point of the app doing the weighting.
      *
      * Nullable, and null is meaningfully different from 0: null is "not graded
      * yet", 0 is "graded, scored nothing".
      */
     mark: real('mark'),
+    /**
+     * What `mark` is out of. Defaults to 100 so a plain percentage can be typed
+     * straight into `mark` with nothing else to fill in.
+     *
+     * The weighted contribution is `(mark / maxMark) * weighting`, computed in
+     * lib/grades.ts — never stored, so editing a weighting re-derives every
+     * figure rather than leaving a stale total behind.
+     */
+    maxMark: real('max_mark').notNull().default(100),
     /** PRD.md §5's checkbox column: true once *graded*, not merely submitted. */
     completed: integer('completed', { mode: 'boolean' }).notNull().default(false),
     notes: text('notes'),
@@ -213,6 +231,14 @@ export const gradeBands = sqliteTable(
     code: text('code').notNull(),
     label: text('label').notNull(),
     minScore: real('min_score').notNull(),
+    /**
+     * What this band is worth on the GPA scale: HD 4, D 3, C 2, P 1, N 0.
+     *
+     * Stored here rather than as a constant for the same reason the thresholds
+     * are — scales vary by institution, and a 7-point scale is common enough
+     * that hardcoding 4.0 would be wrong for a lot of people.
+     */
+    gradePoint: real('grade_point').notNull().default(0),
     sortOrder: integer('sort_order').notNull().default(0),
     ...timestamps,
   },

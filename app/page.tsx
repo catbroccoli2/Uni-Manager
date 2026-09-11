@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getCurrentSemesterUnits, getDueAssessments, listGradeBands } from '@/lib/queries';
-import { summariseUnit } from '@/lib/grades';
+import { gradePointAverage, summariseUnit, unitStanding } from '@/lib/grades';
 import { BayLabel, EmptyBay, Figure, Lamp } from '@/components/ui';
 import { UnitPlate } from '@/components/unit-pill';
 import { describeDueDate, dueUrgency, formatDueDate, todayIso } from '@/lib/dates';
@@ -37,6 +37,26 @@ export default async function BoardPage({ searchParams }: PageProps<'/'>) {
 
   const overdue = due.filter((item) => item.dueDate && dueUrgency(item.dueDate, today) === 'overdue');
   const ahead = due.filter((item) => item.dueDate && dueUrgency(item.dueDate, today) !== 'overdue');
+
+  // Each unit's standing, computed once and reused by both the GPA figures and
+  // the rows beneath them.
+  const standings = current.units.map((unit) => ({
+    unit,
+    summary: summariseUnit(unit.assessments),
+  }));
+  const withBands = standings.map((entry) => ({
+    ...entry,
+    standing: unitStanding(entry.summary, bands),
+  }));
+
+  const confirmedGpa = gradePointAverage(
+    withBands.filter((e) => e.standing.settled).map((e) => e.standing.percent),
+    bands,
+  );
+  const projectedGpa = gradePointAverage(
+    withBands.map((e) => e.standing.percent),
+    bands,
+  );
 
   return (
     <div className="space-y-9">
@@ -114,36 +134,98 @@ export default async function BoardPage({ searchParams }: PageProps<'/'>) {
       {current.units.length > 0 ? (
         <section>
           <BayLabel trailing={current.semester?.name}>Standing</BayLabel>
+
+          {/*
+            Two GPAs, confirmed with the user. Confirmed counts only units with
+            nothing outstanding, so it is a real GPA and never moves on a guess.
+            Projected includes every unit with graded work, using the grade it is
+            currently carrying — useful mid-semester, and labelled so it can
+            never be mistaken for the real thing.
+          */}
+          <div className="mb-3 grid gap-px border border-rack-600 bg-rack-600 sm:grid-cols-2">
+            <GpaFigure
+              label="Confirmed GPA"
+              result={confirmedGpa}
+              hint="units with nothing outstanding"
+            />
+            <GpaFigure
+              label="Projected GPA"
+              result={projectedGpa}
+              hint="including units still in progress"
+              muted
+            />
+          </div>
+
           <ul className="divide-y divide-rack-600 border-y border-rack-600">
-            {current.units.map((unit) => {
-              const summary = summariseUnit(unit.assessments);
-              const settled = summary.weightingRemaining <= 0 && unit.assessments.length > 0;
-              return (
-                <li key={unit.id}>
-                  <Link
-                    href={`/units/${unit.id}`}
-                    className="flex flex-wrap items-center gap-x-4 gap-y-1.5 py-2.5 text-sm transition-colors hover:bg-rack-700/45"
-                  >
-                    <UnitPlate color={unit.color} code={unit.code} name={unit.name} size="sm" />
-                    <span className="min-w-0 flex-1 truncate text-etch-dim">{unit.name}</span>
-                    {unit.assessments.length === 0 ? (
-                      <span className="text-xs text-etch-faint">no assessments</span>
-                    ) : settled ? (
-                      <Figure className="text-etch">{summary.pointsEarned}</Figure>
-                    ) : (
-                      <Figure className="text-xs text-etch-dim">
-                        <span className="text-etch">{summary.worstCase}</span>
-                        <span className="mx-1 text-etch-faint">–</span>
-                        <span className="text-etch">{summary.bestCase}</span>
-                      </Figure>
-                    )}
-                  </Link>
-                </li>
-              );
-            })}
+            {withBands.map(({ unit, standing }) => (
+              <li key={unit.id}>
+                <Link
+                  href={`/units/${unit.id}`}
+                  className="flex flex-wrap items-center gap-x-4 gap-y-1.5 py-2.5 text-sm transition-colors hover:bg-rack-700/45"
+                >
+                  <UnitPlate color={unit.color} code={unit.code} name={unit.name} size="sm" />
+                  <span className="min-w-0 flex-1 truncate text-etch-dim">{unit.name}</span>
+                  {standing.percent === null ? (
+                    <span className="text-xs text-etch-faint">
+                      {unit.assessments.length === 0 ? 'no assessments' : 'nothing graded'}
+                    </span>
+                  ) : (
+                    <span className="flex items-baseline gap-2">
+                      {/* The grade on marked work, which is a real grade even
+                          mid-semester — unlike the running total, which reads
+                          as a fail until the last mark lands. */}
+                      <Figure className="text-etch">{standing.percent}%</Figure>
+                      {standing.band ? (
+                        <span className="rounded-[1px] bg-strip px-1.5 py-px text-[0.6875rem] font-semibold text-strip-ink">
+                          {standing.band.code}
+                        </span>
+                      ) : null}
+                      {!standing.settled ? (
+                        <span className="text-[0.625rem] text-etch-faint">so far</span>
+                      ) : null}
+                    </span>
+                  )}
+                </Link>
+              </li>
+            ))}
           </ul>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A GPA reading. Shows an em dash rather than 0.00 when nothing qualifies —
+ * an empty GPA is "not yet", not "failing".
+ */
+function GpaFigure({
+  label,
+  result,
+  hint,
+  muted = false,
+}: {
+  label: string;
+  result: { gpa: number | null; unitCount: number };
+  hint: string;
+  muted?: boolean;
+}) {
+  return (
+    <div className="bg-rack-800 px-4 py-3">
+      <p className="text-[0.6875rem] font-medium text-etch-dim">{label}</p>
+      <p className="mt-0.5 flex items-baseline gap-2">
+        <Figure
+          className={`text-tally font-semibold ${muted ? 'text-etch-dim' : 'text-etch'} [font-variant-numeric:proportional-nums]`}
+        >
+          {result.gpa === null ? '—' : result.gpa.toFixed(2)}
+        </Figure>
+        {result.gpa !== null ? (
+          <span className="text-xs text-etch-faint">
+            from {result.unitCount} {result.unitCount === 1 ? 'unit' : 'units'}
+          </span>
+        ) : null}
+      </p>
+      <p className="mt-0.5 text-[0.625rem] text-etch-faint">{hint}</p>
     </div>
   );
 }

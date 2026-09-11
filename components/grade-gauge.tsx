@@ -3,11 +3,14 @@
 import { useMemo, useState } from 'react';
 import {
   bandRanges,
+  clampNumber,
   scoreToBand,
+  unitStanding,
   whatDoINeed,
   type BandLike,
   type GradeTarget,
   type UnitGradeSummary,
+  type UnitStanding,
 } from '@/lib/grades';
 import { Figure } from '@/components/ui';
 
@@ -69,9 +72,20 @@ export function GradeGauge({
 
   const pct = (n: number) => `${Math.max(0, Math.min(n, SCALE_MAX))}%`;
 
+  const standing = unitStanding(summary, bands);
+
   return (
     <div className="border border-rack-600 bg-rack-700/40">
-      <Readout outcome={outcome} summary={summary} targetBand={targetBand} />
+      {/*
+        Two readouts, deliberately side by side: where you actually are, and
+        where you are aiming. Before this, the gauge only ever answered the
+        second question, so a unit being carried at HD showed whatever band the
+        target happened to be set to.
+      */}
+      <div className="grid gap-px bg-rack-600 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+        <Standing standing={standing} />
+        <Readout outcome={outcome} summary={summary} targetBand={targetBand} />
+      </div>
 
       <div className="px-4 pb-4 pt-1">
         {/* The track. Bare rack is weight that can no longer be reached. */}
@@ -199,10 +213,7 @@ export function GradeGauge({
               max={SCALE_MAX}
               step="any"
               value={target}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isFinite(next)) setTarget(Math.max(0, Math.min(next, SCALE_MAX)));
-              }}
+              onChange={(event) => setTarget(clampNumber(Number(event.target.value), 0, SCALE_MAX))}
               aria-label="Target percentage"
               className="w-20 rounded-[1px] border border-rack-600 bg-rack-900 px-2 py-1 text-right font-mono tabular-nums text-etch focus:border-lamp-live focus:outline-none"
             />
@@ -211,6 +222,42 @@ export function GradeGauge({
       </div>
 
       <Warnings summary={summary} />
+    </div>
+  );
+}
+
+/**
+ * The grade actually earned so far, and its band.
+ *
+ * Deliberately computed from marked work rather than from the running total: a
+ * unit with 45.3 of 100 banked but only half of it graded is being carried at
+ * 90.6%, and banding the running total would report that as a fail. Once
+ * nothing is outstanding the two converge and this becomes the final grade.
+ */
+function Standing({ standing }: { standing: UnitStanding }) {
+  if (standing.percent === null) {
+    return (
+      <div className="bg-rack-700/40 px-4 pb-3 pt-4">
+        <p className="text-tally font-semibold text-etch-faint">—</p>
+        <p className="mt-1 text-sm text-etch-dim">Nothing graded yet.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-rack-700/40 px-4 pb-3 pt-4">
+      <p className="flex items-baseline gap-2">
+        <GaugeFigure>{round(standing.percent)}</GaugeFigure>
+        <span className="text-tally text-etch-dim">%</span>
+        {standing.band ? (
+          <span className="rounded-[1px] bg-strip px-2 py-0.5 text-tally font-semibold leading-none text-strip-ink">
+            {standing.band.code}
+          </span>
+        ) : null}
+      </p>
+      <p className="mt-1.5 text-sm text-etch-dim">
+        {standing.settled ? 'Final grade. Everything is graded.' : 'Your grade on work marked so far.'}
+      </p>
     </div>
   );
 }
@@ -270,24 +317,20 @@ function Readout({
 
     case 'locked-achieved':
       tone = 'clear';
-      headline = (
-        <>
-          <GaugeFigure>{round(outcome.finalScore)}</GaugeFigure>
-          {targetBand ? (
-            <span className="ml-2 text-tally text-lamp-clear">{targetBand.code}</span>
-          ) : null}
-        </>
-      );
+      // No band beside this figure. It previously showed the TARGET's band,
+      // which labelled a 95.3 as "C" whenever C was the band being aimed at.
+      // The achieved grade and its band live in the standing panel beside this.
+      headline = <span className="text-tally font-semibold text-lamp-clear">Target reached</span>;
       detail =
-        `Final. Everything is graded, and this clears ${round(outcome.target.percent)}${suffix} ` +
-        `by ${round(outcome.margin)}.`;
+        `${round(outcome.target.percent)}${suffix} is cleared by ${round(outcome.margin)}, ` +
+        'with everything graded.';
       break;
 
     case 'locked-missed':
       tone = 'over';
-      headline = <GaugeFigure>{round(outcome.finalScore)}</GaugeFigure>;
+      headline = <span className="text-tally font-semibold text-lamp-over">Target missed</span>;
       detail =
-        `Final. Everything is graded, ${round(outcome.shortfall)} short of ` +
+        `Everything is graded, ${round(outcome.shortfall)} short of ` +
         `${round(outcome.target.percent)}${suffix}.`;
       break;
   }
@@ -309,17 +352,11 @@ function Readout({
       <p className="mt-1 max-w-prose text-sm text-etch-dim">{detail}</p>
 
       {/*
-        Only what the track cannot show. Banked and ceiling are marked on the
-        track itself; repeating them here as a stat row is the hero-metric
-        template's tell, and the reviewer called it.
+        Nothing else goes here. Banked and ceiling are marked on the track
+        itself, and the grade so far is the whole subject of the panel beside
+        this one — repeating either would be the hero-metric template's
+        supporting-stats tell wearing a different hat.
       */}
-      {summary.currentAveragePercent !== null ? (
-        <p className="mt-2 text-xs text-etch-faint">
-          Averaging{' '}
-          <Figure className="text-etch">{round(summary.currentAveragePercent)}%</Figure> on the{' '}
-          <Figure className="text-etch">{round(summary.weightingCompleted)}%</Figure> graded so far.
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -340,10 +377,14 @@ function Warnings({ summary }: { summary: UnitGradeSummary }) {
               : warning.kind === 'completed-without-mark'
                 ? `${warning.indexes.length} ${warning.indexes.length === 1 ? 'strip is' : 'strips are'} ` +
                   'marked graded with no mark entered, and counted as zero.'
-                : warning.kind === 'mark-exceeds-weighting'
+                : warning.kind === 'mark-exceeds-max'
                   ? `${warning.indexes.length} ${warning.indexes.length === 1 ? 'mark is' : 'marks are'} ` +
-                    'higher than the weighting, which is over 100% on that assessment.'
-                  : 'Some weightings or marks are negative.'}
+                    'higher than what the assessment was out of. Counted as entered, in case ' +
+                    'they are bonus marks.'
+                  : warning.kind === 'invalid-max-mark'
+                    ? `${warning.indexes.length} graded ${warning.indexes.length === 1 ? 'strip is' : 'strips are'} ` +
+                      'marked out of zero, so nothing can be scored from them. Set what each was out of.'
+                    : 'Some weightings or marks are negative.'}
           </span>
         </li>
       ))}

@@ -1,30 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandRanges,
+  clampNumber,
+  gradePointAverage,
   scoreToBand,
   summariseUnit,
+  unitStanding,
+  weightedContribution,
+  weightingAllowance,
   whatDoINeed,
   type AssessmentInput,
   type BandLike,
+  type BandWithPoint,
 } from './grades';
 
 /** The PRD.md §7 defaults, mirroring what lib/db/seed.ts inserts. */
-const BANDS: BandLike[] = [
-  { code: 'HD', label: 'High Distinction', minScore: 80 },
-  { code: 'D', label: 'Distinction', minScore: 70 },
-  { code: 'C', label: 'Credit', minScore: 60 },
-  { code: 'P', label: 'Pass', minScore: 50 },
-  { code: 'N', label: 'Fail', minScore: 0 },
+const BANDS: BandWithPoint[] = [
+  { code: 'HD', label: 'High Distinction', minScore: 80, gradePoint: 4 },
+  { code: 'D', label: 'Distinction', minScore: 70, gradePoint: 3 },
+  { code: 'C', label: 'Credit', minScore: 60, gradePoint: 2 },
+  { code: 'P', label: 'Pass', minScore: 50, gradePoint: 1 },
+  { code: 'N', label: 'Fail', minScore: 0, gradePoint: 0 },
 ];
 
-const graded = (weighting: number, mark: number): AssessmentInput => ({
+/**
+ * `maxMark` defaults to the weighting, which makes (mark/maxMark)*weighting
+ * collapse to `mark`. That is exactly what the max_mark migration does to
+ * existing rows, so every expectation below written against the original
+ * weighted-points model still holds — which is the proof that the migration
+ * preserved behaviour.
+ */
+const graded = (weighting: number, mark: number, maxMark: number = weighting): AssessmentInput => ({
   weighting,
   mark,
+  maxMark,
   completed: true,
 });
-const pending = (weighting: number): AssessmentInput => ({
+const pending = (weighting: number, maxMark = 100): AssessmentInput => ({
   weighting,
   mark: null,
+  maxMark,
   completed: false,
 });
 
@@ -61,7 +76,10 @@ describe('summariseUnit', () => {
   it('ignores a mark sitting on an assessment that is not yet graded', () => {
     // §7 defines the inputs as marks "where completed = true". A stray value on
     // an ungraded row must not leak into the total.
-    const summary = summariseUnit([{ weighting: 50, mark: 45, completed: false }, graded(50, 40)]);
+    const summary = summariseUnit([
+      { weighting: 50, mark: 45, maxMark: 50, completed: false },
+      graded(50, 40),
+    ]);
     expect(summary.pointsEarned).toBe(40);
     expect(summary.weightingRemaining).toBe(50);
   });
@@ -123,7 +141,7 @@ describe('summariseUnit warnings (§7 edge cases)', () => {
 
   it('warns, and scores zero, when an assessment is graded with no mark', () => {
     const summary = summariseUnit([
-      { weighting: 50, mark: null, completed: true },
+      { weighting: 50, mark: null, maxMark: 50, completed: true },
       pending(50),
     ]);
     expect(summary.pointsEarned).toBe(0);
@@ -131,11 +149,23 @@ describe('summariseUnit warnings (§7 edge cases)', () => {
     expect(summary.warnings).toContainEqual({ kind: 'completed-without-mark', indexes: [0] });
   });
 
-  it('warns when a mark exceeds its own weighting', () => {
-    const summary = summariseUnit([graded(20, 25), pending(80)]);
-    expect(summary.warnings).toContainEqual({ kind: 'mark-exceeds-weighting', indexes: [0] });
+  it('warns when a mark exceeds what it was out of', () => {
+    // 25 out of 20, on a 20%-weighted assessment.
+    const summary = summariseUnit([graded(20, 25, 20), pending(80)]);
+    expect(summary.warnings).toContainEqual({ kind: 'mark-exceeds-max', indexes: [0] });
     // Still counted: bonus marks are real, so this warns rather than clamps.
     expect(summary.pointsEarned).toBe(25);
+  });
+
+  it('warns, and scores zero, when an assessment is marked out of zero', () => {
+    const summary = summariseUnit([
+      { weighting: 20, mark: 15, maxMark: 0, completed: true },
+      pending(80),
+    ]);
+    expect(summary.warnings).toContainEqual({ kind: 'invalid-max-mark', indexes: [0] });
+    // Not Infinity, not NaN — "out of zero" is not a score.
+    expect(summary.pointsEarned).toBe(0);
+    expect(Number.isFinite(summary.bestCase)).toBe(true);
   });
 
   it('warns on negative values', () => {
@@ -247,6 +277,145 @@ describe('whatDoINeed', () => {
     const outcome = whatDoINeed(summariseUnit([]), { kind: 'percent', value: 70 });
     expect(outcome.status).toBe('locked-missed');
     expect(Number.isFinite(outcome.neededFromRemaining)).toBe(true);
+  });
+});
+
+describe('weightedContribution (the marks model)', () => {
+  it("converts a marksheet's own numbers into points out of 100", () => {
+    // The case that motivated the change: an assignment returned as 18/25,
+    // worth 40% of the unit. The user types 18 and 25, never 28.8.
+    expect(weightedContribution({ weighting: 40, mark: 18, maxMark: 25, completed: true })).toBe(
+      28.8,
+    );
+  });
+
+  it('makes each mark worth weighting/maxMark of the final grade', () => {
+    // The user's own example: worth 50%, marked out of 10, so each mark is 5.
+    const one = weightedContribution({ weighting: 50, mark: 1, maxMark: 10, completed: true });
+    expect(one).toBe(5);
+    expect(weightedContribution({ weighting: 50, mark: 8, maxMark: 10, completed: true })).toBe(40);
+  });
+
+  it('treats a maxMark of 100 as a plain percentage', () => {
+    expect(weightedContribution({ weighting: 50, mark: 85, maxMark: 100, completed: true })).toBe(
+      42.5,
+    );
+  });
+
+  it('returns 0 rather than Infinity or NaN for a non-positive maxMark', () => {
+    expect(weightedContribution({ weighting: 40, mark: 18, maxMark: 0, completed: true })).toBe(0);
+    expect(weightedContribution({ weighting: 40, mark: 18, maxMark: -5, completed: true })).toBe(0);
+  });
+
+  it('returns 0 for an ungraded assessment', () => {
+    expect(weightedContribution({ weighting: 40, mark: null, maxMark: 25, completed: false })).toBe(
+      0,
+    );
+  });
+
+  it('sums into the unit total the same way regardless of how marks are scaled', () => {
+    // 18/25 at 40% and 72/100 at 40% are the same score by different routes.
+    const a = summariseUnit([graded(40, 18, 25), pending(60)]);
+    const b = summariseUnit([graded(40, 72, 100), pending(60)]);
+    expect(a.pointsEarned).toBe(28.8);
+    expect(b.pointsEarned).toBe(28.8);
+  });
+});
+
+describe('unitStanding', () => {
+  it('reports the grade on marked work, not the running total', () => {
+    // 45.3 banked out of 100, but only 50% of the unit has been graded. The
+    // honest answer is 90.6% (HD), never 45.3 (N).
+    const summary = summariseUnit([graded(10, 8.5), graded(40, 36.8), pending(50)]);
+    const standing = unitStanding(summary, BANDS);
+
+    expect(standing.percent).toBe(90.6);
+    expect(standing.band?.code).toBe('HD');
+    expect(standing.settled).toBe(false);
+  });
+
+  it('is settled, and final, once nothing is outstanding', () => {
+    const summary = summariseUnit([graded(50, 40), graded(50, 35)]);
+    const standing = unitStanding(summary, BANDS);
+    expect(standing.percent).toBe(75);
+    expect(standing.band?.code).toBe('D');
+    expect(standing.settled).toBe(true);
+  });
+
+  it('has no standing before anything is graded', () => {
+    const standing = unitStanding(summariseUnit([pending(50), pending(50)]), BANDS);
+    expect(standing.percent).toBeNull();
+    expect(standing.band).toBeNull();
+    expect(standing.settled).toBe(false);
+  });
+
+  it('does not call an empty unit settled', () => {
+    // Nothing outstanding, but nothing graded either — that is not a finished unit.
+    expect(unitStanding(summariseUnit([]), BANDS).settled).toBe(false);
+  });
+});
+
+describe('gradePointAverage', () => {
+  it('averages band grade points across units', () => {
+    // HD(4) + D(3) + C(2) = 9 / 3 = 3
+    expect(gradePointAverage([85, 72, 65], BANDS)).toEqual({ gpa: 3, unitCount: 3 });
+  });
+
+  it('weights every unit equally', () => {
+    // Confirmed with the user: straight average, not credit-point weighted.
+    expect(gradePointAverage([80, 50], BANDS).gpa).toBe(2.5);
+  });
+
+  it('skips units with no graded work rather than scoring them zero', () => {
+    const result = gradePointAverage([85, null, null], BANDS);
+    expect(result).toEqual({ gpa: 4, unitCount: 1 });
+  });
+
+  it('returns null, not 0, when nothing qualifies', () => {
+    expect(gradePointAverage([null, null], BANDS)).toEqual({ gpa: null, unitCount: 0 });
+    expect(gradePointAverage([], BANDS)).toEqual({ gpa: null, unitCount: 0 });
+  });
+
+  it('counts a fail as a real zero', () => {
+    // Distinct from the null case above: this unit was graded and failed.
+    expect(gradePointAverage([30, 85], BANDS)).toEqual({ gpa: 2, unitCount: 2 });
+  });
+
+  it('follows edited grade points', () => {
+    // A 7-point scale, which is why grade points live in the bands table.
+    const sevenPoint = BANDS.map((b) => ({ ...b, gradePoint: b.gradePoint * 1.75 }));
+    expect(gradePointAverage([85], sevenPoint).gpa).toBe(7);
+  });
+});
+
+describe('clamps', () => {
+  it('holds a value inside its bounds', () => {
+    expect(clampNumber(150, 0, 100)).toBe(100);
+    expect(clampNumber(-5, 0, 100)).toBe(0);
+    expect(clampNumber(42.5, 0, 100)).toBe(42.5);
+  });
+
+  it('falls back to the minimum for a non-finite value', () => {
+    expect(clampNumber(Number.NaN, 0, 100)).toBe(0);
+    expect(clampNumber(Number.POSITIVE_INFINITY, 0, 100)).toBe(0);
+  });
+
+  it('computes what weight is left for one assessment', () => {
+    expect(weightingAllowance([{ weighting: 40 }, { weighting: 30 }])).toBe(30);
+    expect(weightingAllowance([])).toBe(100);
+  });
+
+  it('never offers a negative allowance', () => {
+    expect(weightingAllowance([{ weighting: 80 }, { weighting: 40 }])).toBe(0);
+  });
+
+  it('ignores a negative weighting when computing the allowance', () => {
+    // A bad row must not hand out MORE than 100 of allowance to the others.
+    expect(weightingAllowance([{ weighting: -20 }, { weighting: 50 }])).toBe(50);
+  });
+
+  it('leaves fractional allowances exact', () => {
+    expect(weightingAllowance([{ weighting: 7.5 }, { weighting: 7.5 }])).toBe(85);
   });
 });
 

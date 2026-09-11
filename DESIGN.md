@@ -272,6 +272,12 @@ round because a lamp is round.
 - **`BackLink`** — a drawn chevron, never a Unicode arrow.
 - **`GradeGauge`** — the instrument: banked stock, reachable stock, bare rack,
   band rules, a lit current-band zone, annotations on the track, target marker.
+  Its head carries two readouts side by side: **where you are** (the grade on
+  marked work, with its band on a stock plate) and **where you're aiming** (the
+  §7 target answer). Neither borrows the other's band — showing the target's
+  band beside the achieved score was a real bug, labelling a 95.3 as "C".
+- **GPA figures** — two on the board, confirmed and projected, at `tally` size
+  with proportional figures. An em dash, never `0.00`, when nothing qualifies.
 
 ## Do's and Don'ts
 
@@ -289,6 +295,8 @@ round because a lamp is round.
 - Use unit hue for emphasis or lamp colour for selection.
 - Add a rounded card, a progress ring, a donut chart, or a gradient.
 - Add an eyebrow or kicker above a heading. Headings carry their own weight.
-- Show a grade band for a unit that still has work outstanding — mid-semester
-  the running total is a floor, not a grade.
+- Band the running total. The grade is the average on marked work; banding the
+  floor reports a fail on a unit being carried at 90%. Label an unsettled grade
+  "so far" rather than hiding it.
+- Let a target's band decorate an achieved score, or vice versa.
 - Reach for a Unicode glyph where an icon belongs.

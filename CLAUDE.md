@@ -54,8 +54,25 @@ ordinary SQLite database.
 
 ## Key business logic to get right
 
-- Assessment `mark` is stored as weighted points earned, not raw %. Raw % = `mark / weighting * 100`.
-- Grade bands (HD 80+, D 70–79, C 60–69, P 50–59, N <50) live in a config/settings table, not hardcoded — they're this university's actual bands, but should stay editable.
+- Assessment `mark` is **raw marks earned**, with `max_mark` holding what it was
+  out of. The weighted contribution is `(mark / max_mark) * weighting`, computed
+  by `weightedContribution()` in `lib/grades.ts` and never stored. Raw % is
+  `mark / max_mark * 100`. (This replaced an earlier model where `mark` held
+  weighted points directly — see the revision note in `PRD.md` §5.)
+- **A unit's weightings cannot exceed 100.** Entry is clamped to whatever is
+  left, in the rack for feedback and again in the Server Action against freshly
+  read siblings, because only the server can see the current total.
+- **A grade band is only shown for the grade actually achieved**, which is
+  `pointsEarned / weightingCompleted * 100` — the grade on marked work, via
+  `unitStanding()`. Never band the running total: a unit with 45.3 of 100 banked
+  but half of it graded is being carried at 90.6%, and banding 45.3 reports a
+  fail.
+- Grade bands (HD 80+, D 70–79, C 60–69, P 50–59, N <50) and their GPA values
+  (HD 4, D 3, C 2, P 1, N 0) live in the `grade_bands` table, not hardcoded —
+  they're this university's actual bands and scale, but both stay editable.
+- GPA is a straight average of band grade points, not credit-point weighted.
+  The board shows a confirmed GPA (units with nothing outstanding) and a
+  projected one (including units in progress).
 - The grade calculator must handle: unit weightings not summing to 100, target grades that are mathematically impossible, and "already locked in" cases. Full spec in `PRD.md` §7.
 
 ## Do not
