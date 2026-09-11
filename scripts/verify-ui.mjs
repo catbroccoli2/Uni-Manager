@@ -67,6 +67,90 @@ check('createUnit action persists a new unit', await page.getByText(unitName).co
 await page.goto(`${BASE}/semesters/1`, { waitUntil: 'networkidle' });
 check('new unit survives a fresh load', await page.getByText(unitName).count() > 0);
 
+// --- The assessment rack: inline editing ----------------------------------
+await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
+
+const stripCount = await page.locator('li.strip').count();
+check('rack renders a strip per assessment', stripCount >= 4, `${stripCount} strips`);
+
+// Edit a name, commit on blur, and confirm it survives a reload.
+const newName = `Renamed ${Date.now()}`;
+const nameCell = page.locator('li.strip').first().getByLabel('Assessment name');
+await nameCell.fill(newName);
+await nameCell.blur();
+await page.waitForTimeout(900);
+await page.reload({ waitUntil: 'networkidle' });
+const persistedName = await page
+  .locator('li.strip')
+  .first()
+  .getByLabel('Assessment name')
+  .inputValue();
+check('name edit commits on blur and persists', persistedName === newName, persistedName);
+
+// Edit a mark and confirm the derived raw % updates.
+const markCell = page.locator('li.strip').first().getByLabel('Mark, in weighted points');
+await markCell.fill('9');
+await markCell.press('Enter');
+await page.waitForTimeout(900);
+await page.reload({ waitUntil: 'networkidle' });
+const rawShown = await page.locator('li.strip').first().textContent();
+check('mark edit recomputes raw %', rawShown?.includes('90%') === true, rawShown?.trim().slice(0, 80));
+
+// Escape reverts rather than committing.
+const escCell = page.locator('li.strip').first().getByLabel('Assessment name');
+await escCell.fill('THROWAWAY');
+await escCell.press('Escape');
+await page.waitForTimeout(500);
+await page.reload({ waitUntil: 'networkidle' });
+const afterEsc = await page
+  .locator('li.strip')
+  .first()
+  .getByLabel('Assessment name')
+  .inputValue();
+check('Escape reverts without saving', afterEsc === newName, afterEsc);
+
+// Blank mark means "not graded yet", never zero.
+const blankCell = page.locator('li.strip').first().getByLabel('Mark, in weighted points');
+await blankCell.fill('');
+await blankCell.blur();
+await page.waitForTimeout(900);
+await page.reload({ waitUntil: 'networkidle' });
+const blanked = await page
+  .locator('li.strip')
+  .first()
+  .getByLabel('Mark, in weighted points')
+  .inputValue();
+check('cleared mark stays blank rather than becoming 0', blanked === '', `"${blanked}"`);
+
+// Restore the seeded values so screenshots and later runs are stable.
+await blankCell.fill('8.5');
+await blankCell.blur();
+await page.waitForTimeout(400);
+const restoreName = page.locator('li.strip').first().getByLabel('Assessment name');
+await restoreName.fill('Assessment 1: Online Test');
+await restoreName.blur();
+await page.waitForTimeout(900);
+
+// Adding a strip.
+const before2 = await page.locator('li.strip').count();
+await page.getByRole('button', { name: 'Add a strip' }).first().click();
+await page.waitForFunction(
+  (n) => document.querySelectorAll('li.strip').length > n,
+  before2,
+  { timeout: 10000 },
+);
+check('add a strip appends a row', true);
+
+// Remove it again.
+const last = page.locator('li.strip').last();
+await last.getByRole('button', { name: /^Remove/ }).click();
+await page.waitForFunction(
+  (n) => document.querySelectorAll('li.strip').length === n,
+  before2,
+  { timeout: 10000 },
+);
+check('remove deletes the row', true);
+
 // --- Captures --------------------------------------------------------------
 for (const [name, url] of [
   ['semesters', `${BASE}/semesters`],
@@ -103,8 +187,13 @@ await browser.close();
   await client.execute("PRAGMA foreign_keys = ON");
   const s = await client.execute("DELETE FROM semesters WHERE name LIKE 'E2E %'");
   const u = await client.execute("DELETE FROM units WHERE name LIKE 'E2E Unit%'");
+  // Untitled strips left behind by an interrupted add/remove check.
+  const a = await client.execute("DELETE FROM assessments WHERE name = ''");
   client.close();
-  console.log(`cleanup: removed ${s.rowsAffected} semesters, ${u.rowsAffected} units`);
+  console.log(
+    `cleanup: removed ${s.rowsAffected} semesters, ${u.rowsAffected} units, ` +
+      `${a.rowsAffected} untitled strips`,
+  );
 }
 
 const failed = results.filter((r) => !r.pass);

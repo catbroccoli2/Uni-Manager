@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getUnit } from '@/lib/queries';
 import { UnitPlate } from '@/components/unit-pill';
-import { BayLabel, EmptyBay } from '@/components/ui';
+import { BayLabel } from '@/components/ui';
+import { AssessmentRack } from '@/components/assessment-rack';
 import { UnitSettings } from './unit-settings';
 
 export const dynamic = 'force-dynamic';
@@ -31,8 +32,16 @@ export default async function UnitPage({ params }: PageProps<'/units/[id]'>) {
       </div>
 
       <section>
-        <BayLabel>Assessments</BayLabel>
-        <EmptyBay>The assessment rack lands in the next step.</EmptyBay>
+        <BayLabel
+          trailing={
+            unit.assessments.length > 0
+              ? `${unit.assessments.filter((a) => a.completed).length} of ${unit.assessments.length} graded`
+              : undefined
+          }
+        >
+          Assessments
+        </BayLabel>
+        <AssessmentRack unitId={unit.id} assessments={unit.assessments} />
       </section>
 
       <section>
