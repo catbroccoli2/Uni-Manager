@@ -151,8 +151,50 @@ await page.waitForFunction(
 );
 check('remove deletes the row', true);
 
+// --- The board -------------------------------------------------------------
+await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+const boardText = (await page.locator('body').textContent()) ?? '';
+check('board flags overdue work', boardText.includes('Overdue'));
+check(
+  'board shows the seeded near-term items',
+  boardText.includes('Mid-semester Test') && boardText.includes('Assessment 3: Presentation'),
+);
+check('board shows current-semester standing', boardText.includes('Standing'));
+
+// The 7/14 window is a real filter, not decoration: the 45-day exam must drop out.
+const wide = boardText.includes('Final Examination');
+await page.goto(`${BASE}/?days=7`, { waitUntil: 'networkidle' });
+const narrowText = (await page.locator('body').textContent()) ?? '';
+const narrow = narrowText.includes('Assessment 3: Presentation');
+check(
+  'window filter changes what is listed',
+  !wide && narrow,
+  `14d hides the +38d exam: ${!wide}; 7d keeps the +4d item: ${narrow}`,
+);
+check('overdue survives the narrow window', narrowText.includes('Overdue'));
+
+// --- Clean up before capturing --------------------------------------------
+// Removing the rows this run created BEFORE the screenshots, so the captures
+// show the real app rather than "E2E Unit 1789122326492" sitting in a bay.
+async function cleanup() {
+  const { createClient } = await import('@libsql/client');
+  const { resolveDatabaseUrl } = await import('../lib/db/path.ts');
+  const client = createClient({ url: resolveDatabaseUrl() });
+  await client.execute('PRAGMA foreign_keys = ON');
+  const s = await client.execute("DELETE FROM semesters WHERE name LIKE 'E2E %'");
+  const u = await client.execute("DELETE FROM units WHERE name LIKE 'E2E Unit%'");
+  const a = await client.execute("DELETE FROM assessments WHERE name = ''");
+  client.close();
+  console.log(
+    `cleanup: removed ${s.rowsAffected} semesters, ${u.rowsAffected} units, ` +
+      `${a.rowsAffected} untitled strips`,
+  );
+}
+await cleanup();
+
 // --- Captures --------------------------------------------------------------
 for (const [name, url] of [
+  ['board', `${BASE}/`],
   ['semesters', `${BASE}/semesters`],
   ['semester-detail', `${BASE}/semesters/1`],
   ['unit', `${BASE}/units/1`],
@@ -163,8 +205,10 @@ for (const [name, url] of [
 
 const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
 for (const [name, url] of [
+  ['board', `${BASE}/`],
   ['semesters', `${BASE}/semesters`],
   ['semester-detail', `${BASE}/semesters/1`],
+  ['unit', `${BASE}/units/1`],
 ]) {
   await mobile.goto(url, { waitUntil: 'networkidle' });
   await mobile.screenshot({ path: `${OUT}/${name}-mobile.png`, fullPage: true });
@@ -178,23 +222,8 @@ check('no horizontal overflow at 390px', overflow <= 0, `overflow ${overflow}px`
 
 await browser.close();
 
-// Remove the rows this run created. Without this every run leaves an "E2E …"
-// semester and unit behind, and the next screenshot is of a polluted board.
-{
-  const { createClient } = await import('@libsql/client');
-  const { resolveDatabaseUrl } = await import('../lib/db/path.ts');
-  const client = createClient({ url: resolveDatabaseUrl() });
-  await client.execute("PRAGMA foreign_keys = ON");
-  const s = await client.execute("DELETE FROM semesters WHERE name LIKE 'E2E %'");
-  const u = await client.execute("DELETE FROM units WHERE name LIKE 'E2E Unit%'");
-  // Untitled strips left behind by an interrupted add/remove check.
-  const a = await client.execute("DELETE FROM assessments WHERE name = ''");
-  client.close();
-  console.log(
-    `cleanup: removed ${s.rowsAffected} semesters, ${u.rowsAffected} units, ` +
-      `${a.rowsAffected} untitled strips`,
-  );
-}
+// A second sweep, in case a check between cleanup and here added a row.
+await cleanup();
 
 const failed = results.filter((r) => !r.pass);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

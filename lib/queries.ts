@@ -156,29 +156,6 @@ export async function getDueAssessments(windowDays: number): Promise<DueAssessme
   }));
 }
 
-/** Recently graded work, so the board shows results landing as well as work due. */
-export async function getRecentlyGraded(limit = 5): Promise<DueAssessment[]> {
-  await ensureDatabaseReady();
-
-  const rows = await db
-    .select({ assessment: assessments, unit: units, semester: semesters })
-    .from(assessments)
-    .innerJoin(units, eq(assessments.unitId, units.id))
-    .innerJoin(semesters, eq(units.semesterId, semesters.id))
-    .where(and(eq(assessments.completed, true), isNotNull(assessments.mark)))
-    .orderBy(desc(assessments.updatedAt))
-    .limit(limit);
-
-  return rows.map((row) => ({
-    ...row.assessment,
-    unitId: row.unit.id,
-    unitName: row.unit.name,
-    unitCode: row.unit.code,
-    unitColor: row.unit.color,
-    semesterName: row.semester.name,
-  }));
-}
-
 export async function listGradeBands(): Promise<GradeBand[]> {
   await ensureDatabaseReady();
   return db.select().from(gradeBands).orderBy(asc(gradeBands.sortOrder));
@@ -202,13 +179,3 @@ export async function getCurrentSemesterUnits(): Promise<{
   return { semester: current, units: await getSemesterUnits(current.id) };
 }
 
-/** Used by the export route: everything, in one place. */
-export async function countAll(): Promise<{ semesters: number; units: number; assessments: number }> {
-  await ensureDatabaseReady();
-  const [s] = await db.select({ n: count() }).from(semesters);
-  const [u] = await db.select({ n: count() }).from(units);
-  const [a] = await db.select({ n: count() }).from(assessments);
-  return { semesters: s?.n ?? 0, units: u?.n ?? 0, assessments: a?.n ?? 0 };
-}
-
-export { gte };
