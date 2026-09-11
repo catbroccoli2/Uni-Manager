@@ -75,6 +75,28 @@ ordinary SQLite database.
   projected one (including units in progress).
 - The grade calculator must handle: unit weightings not summing to 100, target grades that are mathematically impossible, and "already locked in" cases. Full spec in `PRD.md` §7.
 
+## Outline import
+
+`lib/outline-parser.ts` reads a pasted unit outline and proposes a draft. It is
+pure — no DOM, no database, no network — and runs in the browser, so an outline
+the user decides not to import never leaves their machine.
+
+Two rules make a guessing parser safe to put in front of a database, and both
+are load-bearing:
+
+- **Never invent.** A line that cannot be placed goes to `unmatched` and is
+  shown. Text with no assessment table produces an empty draft, not a plausible
+  one.
+- **Show the evidence.** Every row carries its `sourceLine` and a `confidence`,
+  and the review sorts low-confidence rows first.
+
+`commitOutlineDraft` re-validates everything server-side and caps weightings at
+100 — a draft that crossed the wire from a heuristic parser is never trusted.
+
+This shipped as the offline variant of PRD.md §9, so **the Claude API exception
+below remains unspent**. If the API path is ever built (for scanned outlines), it
+is an addition, not a replacement.
+
 ## Do not
 
 - Add user accounts, auth, or any external network calls beyond the optional Phase 3 Claude API curriculum-parsing feature

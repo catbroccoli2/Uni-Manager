@@ -2,12 +2,16 @@ import { and, asc, count, desc, eq, gte, isNotNull, lte, sql } from 'drizzle-orm
 import { db, ensureDatabaseReady } from '@/lib/db';
 import {
   assessments,
+  contentSources,
   gradeBands,
   semesters,
+  timetableEntries,
   units,
   type Assessment,
+  type ContentSource,
   type GradeBand,
   type Semester,
+  type TimetableEntry,
   type Unit,
 } from '@/db/schema';
 import { todayIso, addDaysIso } from '@/lib/dates';
@@ -154,6 +158,35 @@ export async function getDueAssessments(windowDays: number): Promise<DueAssessme
     unitColor: row.unit.color,
     semesterName: row.semester.name,
   }));
+}
+
+/**
+ * A unit's class times and readings.
+ *
+ * These tables have been in the schema since the first migration but had no UI
+ * until the outline import could write to them. Reading them here keeps
+ * imported rows visible rather than leaving them in the database unseen.
+ */
+export async function getUnitExtras(unitId: number): Promise<{
+  timetable: TimetableEntry[];
+  sources: ContentSource[];
+}> {
+  await ensureDatabaseReady();
+
+  const [timetable, sources] = await Promise.all([
+    db
+      .select()
+      .from(timetableEntries)
+      .where(eq(timetableEntries.unitId, unitId))
+      .orderBy(asc(timetableEntries.dayOfWeek), asc(timetableEntries.startTime)),
+    db
+      .select()
+      .from(contentSources)
+      .where(eq(contentSources.unitId, unitId))
+      .orderBy(asc(contentSources.title)),
+  ]);
+
+  return { timetable, sources };
 }
 
 export async function listGradeBands(): Promise<GradeBand[]> {

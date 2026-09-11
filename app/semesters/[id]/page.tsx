@@ -128,7 +128,18 @@ export default async function SemesterPage({ params }: PageProps<'/semesters/[id
       </section>
 
       <section>
-        <BayLabel>Add a unit</BayLabel>
+        <BayLabel
+          trailing={
+            <Link
+              href={`/semesters/${semester.id}/import`}
+              className="text-etch-dim underline decoration-rack-500 underline-offset-2 hover:text-etch hover:decoration-etch"
+            >
+              Import from an outline
+            </Link>
+          }
+        >
+          Add a unit
+        </BayLabel>
         <UnitComposer semesterId={semester.id} />
       </section>
     </div>

@@ -124,7 +124,24 @@ This is the feature you specifically asked for, spelled out precisely so it gets
 
 ## 9. Phase 3 / stretch
 
-- **Curriculum document parsing** — upload a unit outline PDF, extract assessment names/dates/weightings via the Claude API, populate the assessment table as a draft the user reviews and confirms
+- **Curriculum document parsing** — ~~upload a unit outline PDF, extract assessment names/dates/weightings via the Claude API~~, populate the assessment table as a draft the user reviews and confirms
+
+  **Shipped, as an offline variant.** Rather than uploading a PDF to the Claude
+  API, you paste the outline's text and a local parser (`lib/outline-parser.ts`)
+  proposes the draft. Chosen deliberately: it needs no API key, costs nothing per
+  use, adds no dependency, and leaves §11's "no external network calls" intact
+  rather than spending the exception this section grants.
+
+  It extracts the unit's code, name and credit points; its assessments with
+  weightings, dates, what each is marked out of and individual/group; its class
+  times; and, conservatively, its readings. Every row shows the line it came from
+  and a confidence, unrecognised lines are listed rather than dropped, and text
+  with no assessment table produces an empty draft instead of an invented one.
+
+  The trade: it only reads text that can be selected and copied. A **scanned**
+  outline gives it nothing, and unusual layouts confuse it. The Claude API path
+  in the original spec would handle both, and remains the upgrade if that ever
+  matters.
 - **Public deployment path** — swap SQLite for hosted Postgres, deploy to Vercel, only if wanted later
 
 ## 10. Tech stack

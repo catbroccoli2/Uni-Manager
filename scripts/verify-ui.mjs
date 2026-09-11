@@ -410,6 +410,116 @@ check(
   check('export carries the GPA scale', data.gradeBands.every((b) => typeof b.gradePoint === 'number'));
 }
 
+// --- Outline import (PRD §9, offline variant) ------------------------------
+const OUTLINE = `Unit Outline
+MKTG3120 Digital Marketing Strategy
+12 credit points
+
+Classes
+Monday 10:00 - 12:00 Lecture Building 3 Room 14
+Wednesday 2pm-3pm Tutorial Room B12
+
+Assessment Task                 Weighting   Due Date
+Assessment 1: Online Quiz       15%         16/03/2026
+Assessment 2: Campaign Report   35%         14/04/2026
+Assessment 3: Group Pitch       20%         12/05/2026
+Final Examination               30%         19/06/2026
+
+Consultation is by appointment with the unit coordinator.`;
+
+await page.goto(`${BASE}/semesters/1/import`, { waitUntil: 'networkidle' });
+await page.getByLabel('Outline text').fill(OUTLINE);
+await page.getByRole('button', { name: 'Read the outline' }).click();
+await page.waitForTimeout(600);
+
+const review = (await page.locator('body').textContent()) ?? '';
+// The unit fields are inputs, and input values are not in textContent.
+check(
+  'import reads the unit code and name',
+  (await page.getByLabel('Code').inputValue()) === 'MKTG3120' &&
+    (await page.getByLabel('Unit name').inputValue()).includes('Digital Marketing'),
+);
+check('import reads the assessments', review.includes('Assessment 2: Campaign Report'));
+check('import reads the class times', review.includes('Class times') && review.includes('10:00'));
+check(
+  'import lists lines it could not place',
+  review.includes('Not placed') && review.includes('Consultation'),
+);
+// Every row must show the line it was read from, so the user can check the
+// parser's working rather than trust a clean-looking answer.
+check(
+  'import shows each row the source line it came from',
+  review.includes('Assessment 1: Online Quiz 15% 16/03/2026') &&
+    review.includes('Monday 10:00 - 12:00 Lecture Building 3 Room 14'),
+);
+check(
+  'table headers are not reported as unplaced content',
+  !review.includes('Assessment Task Weighting Due Date'),
+);
+
+// The review screen is the one that matters, so capture it while it is up.
+await page.screenshot({ path: `${OUT}/import-review-desktop.png`, fullPage: true });
+
+// Drop one assessment; it must not be created.
+await page.getByRole('checkbox', { name: 'Import Assessment 3: Group Pitch' }).click();
+await page.waitForTimeout(200);
+await page.getByRole('button', { name: 'Import', exact: true }).click();
+await page.waitForURL(/\/units\/\d+$/, { timeout: 15000 });
+
+const imported = (await page.locator('body').textContent()) ?? '';
+check('import lands on the new unit', imported.includes('Digital Marketing Strategy'));
+
+// Assessment names live in inputs on the rack, so read their values.
+const importedNames = await page.locator('li.strip').getByLabel('Assessment name').all();
+const names = await Promise.all(importedNames.map((cell) => cell.inputValue()));
+check(
+  'imported assessments are on the rack',
+  names.includes('Assessment 2: Campaign Report'),
+  names.join(' | '),
+);
+check(
+  'the unticked assessment was not created',
+  !names.includes('Assessment 3: Group Pitch') && names.length === 3,
+  `${names.length} strips`,
+);
+check('imported class times are visible on the unit', imported.includes('Class times'));
+check(
+  'imported weightings are correct',
+  (await page.locator('li.strip').nth(1).getByLabel(/^Weighting/).inputValue()) === '35',
+);
+check(
+  'imported assessments default to out-of-100 and ungraded',
+  (await page.locator('li.strip').first().getByLabel('Mark is out of').inputValue()) === '100' &&
+    (await page.locator('li.strip').first().getByLabel('Mark earned').inputValue()) === '',
+);
+
+// Re-importing the same outline must offer to merge rather than duplicate.
+await page.goto(`${BASE}/semesters/1/import`, { waitUntil: 'networkidle' });
+await page.getByLabel('Outline text').fill(OUTLINE);
+await page.getByRole('button', { name: 'Read the outline' }).click();
+await page.waitForTimeout(600);
+const targetValue = await page.getByLabel('Import into').inputValue();
+check(
+  'a matching unit code defaults to merging, not duplicating',
+  targetValue !== 'new',
+  `target=${targetValue}`,
+);
+
+// Prose with no table must produce nothing rather than an invented assessment.
+await page.goto(`${BASE}/semesters/1/import`, { waitUntil: 'networkidle' });
+await page.getByLabel('Outline text').fill(
+  'Welcome to the unit. Students must achieve 50% overall to pass. ' +
+    'Attendance of 80% at scheduled classes is expected throughout the semester.',
+);
+await page.getByRole('button', { name: 'Read the outline' }).click();
+await page.waitForTimeout(600);
+const prose = (await page.locator('body').textContent()) ?? '';
+check('unparseable prose invents nothing', prose.includes('Nothing recognisable'));
+check(
+  'the import button is disabled when nothing was found',
+  await page.getByRole('button', { name: 'Import', exact: true }).isDisabled(),
+);
+
 // --- Accessibility ---------------------------------------------------------
 function luminance([r, g, b]) {
   const f = (c) => {
@@ -429,6 +539,7 @@ for (const [label, url] of [
   ['unit', `${BASE}/units/1`],
   ['settings', `${BASE}/settings`],
   ['semester', `${BASE}/semesters/1`],
+  ['import', `${BASE}/semesters/1/import`],
 ]) {
   await page.goto(url, { waitUntil: 'networkidle' });
 
@@ -532,6 +643,7 @@ for (const [name, url] of [
   ['semester-detail', `${BASE}/semesters/1`],
   ['unit', `${BASE}/units/1`],
   ['settings', `${BASE}/settings`],
+  ['import', `${BASE}/semesters/1/import`],
 ]) {
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.screenshot({ path: `${OUT}/${name}-desktop.png`, fullPage: true });
