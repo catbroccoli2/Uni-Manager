@@ -1,5 +1,20 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"http://localhost:3000/semesters\")",
+      "Bash(curl -s \"http://localhost:3000/semesters/1\")",
+      "Bash(curl -s \"http://localhost:3000/units/1\")",
+      "Read(//c/Program Files \\\\\\(x86\\\\\\)/Microsoft/Edge/Application/**)",
+      "Read(//c/Program Files/Google/Chrome/Application/**)",
+      "Bash(node __TRACKED_VAR__/verify-ui.mjs .impeccable/review)",
+      "Bash(cp __TRACKED_VAR__/verify-ui.mjs scripts/verify-ui.mjs)",
+      "Bash(node scripts/verify-ui.mjs .impeccable/review)"
+    ]
+  },
+  "enabledPlugins": {
+    "modern-web-guidance@googlechrome": true
+  },
   "extraKnownMarketplaces": {
     "googlechrome": {
       "source": {
@@ -7,8 +22,5 @@
         "repo": "GoogleChrome/modern-web-guidance"
       }
     }
-  },
-  "enabledPlugins": {
-    "modern-web-guidance@googlechrome": true
   }
 }

@@ -1,26 +1,181 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+  The rack.
+
+  Every surface in this app is a gunmetal rack holding buff paper strips, after
+  the progress-strip boards air traffic control ran on paper: one strip per
+  flight, seated in a ruled bay, annotated in place as its state changed, and
+  moved between bays rather than rewritten.
+
+  Three laws hold the world together, and breaking any one of them is what makes
+  this look like a generic dashboard again:
+
+  1. Buff is the only large light field. It means "a strip" — a real record with
+     a weight. Nothing decorative is ever buff.
+  2. Every colour channel states exactly one thing. Unit hue means which unit.
+     Lamp colour means urgency. Neither is ever used for emphasis or delight.
+  3. A strip's width is its weighting. Size is data, not layout convenience.
+*/
+
+@theme {
+  /* --- The rack itself ------------------------------------------------- */
+  --color-rack-900: #0d0f11; /* deepest well, behind everything */
+  --color-rack-800: #14171a; /* the rack face */
+  --color-rack-700: #1b1f23; /* a seated bay */
+  --color-rack-600: #252a30; /* bay divider rules */
+  --color-rack-500: #363d45; /* raised edge */
+
+  /* --- Strip stock ------------------------------------------------------ */
+  --color-strip: #d6cbb4; /* buff paper */
+  --color-strip-dim: #a79e8b; /* a strip not yet written on */
+  --color-strip-ink: #16181a; /* grease pencil on buff */
+  --color-strip-ink-soft: #4a4d51;
+
+  /* --- Type on the rack ------------------------------------------------- */
+  --color-etch: #e6e3dc; /* stencilled label on metal */
+  --color-etch-dim: #9aa1a9; /* secondary label. 5.9:1 on rack-800 */
+  --color-etch-faint: #6b727a; /* rule labels only, never body text */
+
+  /* --- Lamps. One law: urgency. ---------------------------------------- */
+  --color-lamp-live: #f0a81e; /* due soon */
+  --color-lamp-over: #e0503a; /* overdue, or impossible */
+  --color-lamp-clear: #4f9d84; /* cleared, or guaranteed */
+
+  /* --- Unit hues. One law: which unit. --------------------------------- */
+  --color-unit-amber: #d99a2b;
+  --color-unit-rose: #d4657a;
+  --color-unit-violet: #9b7fd4;
+  --color-unit-cyan: #4ea8c4;
+  --color-unit-emerald: #5aa87a;
+  --color-unit-orange: #d9793f;
+  --color-unit-blue: #6b8fd4;
+  --color-unit-pink: #cf7ab5;
+
+  /* --- Type ------------------------------------------------------------- */
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, monospace;
+
+  /* Instrument scale. The gauge is the only thing that gets to be large. */
+  --text-gauge: 4.5rem;
+  --text-gauge--line-height: 0.92;
+  --text-gauge--letter-spacing: -0.035em;
+  --text-tally: 2rem;
+  --text-tally--line-height: 1;
+  --text-tally--letter-spacing: -0.02em;
+
+  /* Bay geometry. Square corners: paper in a metal channel has no radius. */
+  --radius-strip: 1px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+/*
+  Browser surfaces. The parts not drawn here still carry the design, and
+  shipping them at their defaults is the clearest tell that a page was
+  assembled rather than built.
+*/
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    color-scheme: dark;
+    /* Every number in this app is compared against another number in a column
+       above or below it, so figures never change width. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  html {
+    background: var(--color-rack-900);
+  }
+
+  body {
+    background: var(--color-rack-800);
+    color: var(--color-etch);
+    font-family: var(--font-sans);
+    /* Metal has a grain. A single hairline repeat, not a texture image. */
+    background-image: repeating-linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.014) 0px,
+      rgb(255 255 255 / 0.014) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  }
+
+  ::selection {
+    background: var(--color-lamp-live);
+    color: var(--color-rack-900);
+  }
+
+  /* Buff is a light field; a selection on it has to invert the other way. */
+  .strip ::selection,
+  .strip::selection {
+    background: var(--color-strip-ink);
+    color: var(--color-strip);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-lamp-live);
+    outline-offset: 2px;
+  }
+
+  /* Inputs on buff stock inherit the strip's ink, not the rack's. */
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+    caret-color: var(--color-lamp-live);
+  }
+
+  .strip input,
+  .strip textarea,
+  .strip select {
+    caret-color: var(--color-strip-ink);
+  }
+
+  * {
+    scrollbar-color: var(--color-rack-500) var(--color-rack-900);
+    scrollbar-width: thin;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  /*
+    A strip: buff stock seated in a bay. The inset dark edge is the channel it
+    sits in — an offset shadow with real blur, never a zero-offset halo.
+  */
+  .strip {
+    background: var(--color-strip);
+    color: var(--color-strip-ink);
+    border-radius: var(--radius-strip);
+    box-shadow:
+      0 1px 0 0 rgb(0 0 0 / 0.5),
+      0 2px 6px -2px rgb(0 0 0 / 0.55);
+  }
+
+  /* A strip with nothing written on it yet: the stock is there, the ink isn't. */
+  .strip-pending {
+    background: repeating-linear-gradient(
+      135deg,
+      var(--color-strip-dim) 0px,
+      var(--color-strip-dim) 6px,
+      #9c9382 6px,
+      #9c9382 12px
+    );
+    color: var(--color-strip-ink);
+  }
+
+  /* The ruled channel a row of strips is seated in. */
+  .bay {
+    border-top: 1px solid var(--color-rack-600);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

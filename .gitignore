@@ -51,3 +51,10 @@ next-env.d.ts
 
 # impeccable ships a 15MB platform binary that its launcher re-downloads on demand
 .claude/skills/impeccable/scripts/bin/
+
+# Generated review artifacts. The surface brief in .impeccable/surfaces/ is
+# durable design intent and stays committed; screenshots and mocks are output.
+.impeccable/review/
+.impeccable/mocks/
+.impeccable/build/
+.impeccable/questions/
