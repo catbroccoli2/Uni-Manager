@@ -1,0 +1,158 @@
+{
+  "name": "Uni Manager",
+  "northStar": "A gunmetal rack of buff paper strips, after air traffic control progress boards. Every assessment is a strip seated in a ruled bay; the rack shows your standing without being asked.",
+  "rules": [
+    "Buff is the only large light field, and it always means a real record. Nothing decorative is ever buff.",
+    "Every colour channel states exactly one thing: unit hue is identity, lamp colour is urgency. Never emphasis, selection, or delight.",
+    "A strip's size is its weighting. Size is data, not layout convenience.",
+    "Warn, never silently correct. Where the numbers are ambiguous, say so and keep computing.",
+    "A grade band is shown only when nothing is outstanding. Mid-semester the running total is a floor, not a grade."
+  ],
+  "colorRamps": {
+    "rack": {
+      "900": "#0d0f11",
+      "800": "#14171a",
+      "700": "#1b1f23",
+      "600": "#252a30",
+      "500": "#363d45"
+    },
+    "stock": {
+      "written": "#d6cbb4",
+      "blank": "#a79e8b",
+      "hatch": "#9c9382"
+    },
+    "ink": {
+      "primary": "#16181a",
+      "soft": "#33363a",
+      "alert": "#5f1f12",
+      "warn": "#452c02"
+    },
+    "etch": {
+      "primary": "#e6e3dc",
+      "dim": "#9aa1a9",
+      "faint": "#858d95"
+    },
+    "lamp": {
+      "live": "#f0a81e",
+      "over": "#ec6b55",
+      "clear": "#62b89d"
+    },
+    "unit": {
+      "amber": "#d99a2b",
+      "rose": "#d4657a",
+      "violet": "#9b7fd4",
+      "cyan": "#4ea8c4",
+      "emerald": "#5aa87a",
+      "orange": "#d9793f",
+      "blue": "#6b8fd4",
+      "pink": "#cf7ab5"
+    }
+  },
+  "contrast": {
+    "standard": "WCAG AA, 4.5:1 for body text",
+    "verifiedBy": "scripts/verify-ui.mjs computes ratios from rendered pixels on every screen",
+    "notes": [
+      "Inks on stock are checked against blank stock (#a79e8b), the darker of the two, because urgency inks only ever land on ungraded strips.",
+      "Lamp colours clear 4.5:1 on rack-600, the lightest ground any of them sits on, because they carry text as well as fills.",
+      "Unit hues always take rack-900 ink: dark ink clears AA on all eight, white clears it on none."
+    ]
+  },
+  "elevation": {
+    "philosophy": "Almost none. Paper in a metal channel is not floating.",
+    "strip": "0 1px 0 0 rgb(0 0 0 / 0.5), 0 2px 6px -2px rgb(0 0 0 / 0.55)",
+    "header": "backdrop-filter: blur(4px) — a specific effect for content scrolling under a sticky bar, not decoration",
+    "banned": [
+      "zero-offset coloured halos",
+      "hard offset block shadows",
+      "glass or blur as decoration",
+      "gradients of any kind as surface treatment"
+    ]
+  },
+  "texture": {
+    "rackGrain": "repeating-linear-gradient(180deg, rgb(255 255 255 / 0.014) 0 1px, transparent 1px 3px)",
+    "blankStock": "repeating-linear-gradient(135deg, #a79e8b 0 6px, #9c9382 6px 12px)",
+    "bayRule": "repeating-linear-gradient(180deg, #252a30 0 1px, transparent 1px 100%) over #0d0f11"
+  },
+  "motion": {
+    "philosophy": "Transitions carry state change only. Nothing animates on entrance; a rack does not assemble itself.",
+    "colorTransition": "150ms ease",
+    "reducedMotion": "All durations collapse to 0.01ms under prefers-reduced-motion."
+  },
+  "breakpoints": {
+    "sm": "640px",
+    "lg": "1024px",
+    "notes": "The assessment rack is a true grid at lg and stacks per-strip below it, each field carrying its own small label. Band scale labels drop their numbers below sm, where four labels between 50 and 80 would collide."
+  },
+  "typography": {
+    "families": {
+      "sans": "Archivo — everything read as language, including the gauge's display figure",
+      "mono": "JetBrains Mono — only where a figure is measured or compared"
+    },
+    "numerals": {
+      "default": "tabular-nums globally; nearly every figure is compared against one above or below it",
+      "exception": "The gauge headline is proportional. There is no column there, and a monospaced decimal point takes a full digit cell, rendering 9.4 as '9 . 4'."
+    }
+  },
+  "components": {
+    "strip": {
+      "description": "A record. Clean stock is graded; hatched blank stock is not yet.",
+      "html": "<li class=\"strip\">Assessment 1: Online Test</li>",
+      "css": ".strip{background:#d6cbb4;color:#16181a;border-radius:1px;padding:8px 12px;box-shadow:0 1px 0 0 rgb(0 0 0/.5),0 2px 6px -2px rgb(0 0 0/.55)}"
+    },
+    "stripPending": {
+      "description": "Blank stock. Sets background-color as well as background-image so dark ink stays readable if the gradient never paints.",
+      "html": "<li class=\"strip strip-pending\">Final Examination</li>",
+      "css": ".strip-pending{background-color:#a79e8b;background-image:repeating-linear-gradient(135deg,#a79e8b 0 6px,#9c9382 6px 12px);color:#16181a}"
+    },
+    "rackBay": {
+      "description": "The ruled channel strips are seated in. The 3px seam shows the channel both strips sit in, rather than a gap between two objects.",
+      "html": "<ul class=\"rack-bay\"><li class=\"strip\">…</li><li class=\"strip\">…</li></ul>",
+      "css": ".rack-bay{background-color:#0d0f11;background-image:repeating-linear-gradient(180deg,#252a30 0 1px,transparent 1px 100%);border-block:1px solid #252a30;padding:3px;display:flex;flex-direction:column;gap:3px}"
+    },
+    "unitPlate": {
+      "description": "A unit's painted plate. Always shows code or name, so colour is never the only channel carrying identity.",
+      "html": "<span class=\"unit-plate\">BUSM2301</span>",
+      "css": ".unit-plate{background:#d99a2b;color:#0d0f11;border-radius:1px;padding:2px 8px;font-size:.75rem;font-weight:600}"
+    },
+    "lamp": {
+      "description": "A 6px urgency dot, always paired with text. The only round thing in the system.",
+      "html": "<span class=\"lamp lamp-over\"></span>",
+      "css": ".lamp{display:inline-block;width:6px;height:6px;border-radius:9999px}.lamp-over{background:#ec6b55}"
+    },
+    "buttonPrimary": {
+      "description": "A buff plate: the one thing on the rack you write on.",
+      "html": "<button class=\"btn-primary\">Add a strip</button>",
+      "css": ".btn-primary{background:#d6cbb4;color:#16181a;border-radius:1px;padding:6px 12px;font-size:.875rem;font-weight:500}.btn-primary:hover{background:#e3dac7}"
+    },
+    "control": {
+      "description": "An input on the rack face.",
+      "html": "<input class=\"control\" />",
+      "css": ".control{background:#0d0f11;color:#e6e3dc;border:1px solid #252a30;border-radius:1px;padding:6px 10px;font-size:.875rem}.control:focus{border-color:#f0a81e;outline:none}"
+    },
+    "cell": {
+      "description": "An always-live editable cell on a strip. No borders until hover; commits on blur or Enter, reverts on Escape.",
+      "html": "<input class=\"cell\" />",
+      "css": ".cell{background:transparent;color:#16181a;border:1px solid transparent;border-radius:1px;padding:4px 6px}.cell:hover{border-color:rgb(22 24 26/.25)}.cell:focus{border-color:rgb(22 24 26/.6);background:rgb(214 203 180/.6);outline:none}"
+    },
+    "bayLabel": {
+      "description": "A stencilled section plate over a hairline rule. Never carries an eyebrow above it.",
+      "html": "<div class=\"bay-label\"><h2>Assessments</h2><span>2 of 4 graded</span></div>",
+      "css": ".bay-label{display:flex;align-items:baseline;justify-content:space-between;gap:16px;border-bottom:1px solid #252a30;padding-bottom:6px;margin-bottom:8px}.bay-label h2{font-size:.8125rem;font-weight:600;letter-spacing:.01em;color:#9aa1a9}"
+    }
+  },
+  "browserSurfaces": {
+    "selection": "lamp-live ground with rack-900 text; inverted to ink-on-stock inside a strip",
+    "caret": "lamp-live on the rack, strip-ink on stock",
+    "focusRing": "2px solid lamp-live, 2px offset",
+    "scrollbar": "thin, rack-500 thumb on rack-900 track",
+    "colorScheme": "dark; date inputs inside strips are forced light to match the stock"
+  },
+  "donts": [
+    "Buff for anything that is not a record",
+    "Unit hue for emphasis, or lamp colour for selection",
+    "Rounded cards, progress rings, donut charts, gradients",
+    "An eyebrow or kicker above a heading",
+    "A grade band on a unit with work outstanding",
+    "A Unicode glyph where an icon belongs"
+  ]
+}

@@ -26,21 +26,33 @@
   --color-rack-600: #252a30; /* bay divider rules */
   --color-rack-500: #363d45; /* raised edge */
 
-  /* --- Strip stock ------------------------------------------------------ */
+  /*
+    --- Strip stock ------------------------------------------------------
+    Every ink below clears WCAG AA (4.5:1) against BOTH stocks, checked against
+    the hatched `strip-dim` rather than the clean `strip`, because that is the
+    darker ground and it is where the urgency inks actually land: anything
+    overdue or due soon is by definition still ungraded.
+  */
   --color-strip: #d6cbb4; /* buff paper */
   --color-strip-dim: #a79e8b; /* a strip not yet written on */
-  --color-strip-ink: #16181a; /* grease pencil on buff */
-  --color-strip-ink-soft: #4a4d51;
+  --color-strip-ink: #16181a; /* grease pencil. 11.1:1 on strip, 6.7:1 on dim */
+  --color-strip-ink-soft: #33363a; /* 7.6:1 on strip, 4.6:1 on dim */
+  --color-strip-alert: #5f1f12; /* overdue, on stock. 7.7:1 / 4.7:1 */
+  --color-strip-warn: #452c02; /* due soon, on stock. 8.1:1 / 4.9:1 */
 
   /* --- Type on the rack ------------------------------------------------- */
   --color-etch: #e6e3dc; /* stencilled label on metal */
-  --color-etch-dim: #9aa1a9; /* secondary label. 5.9:1 on rack-800 */
-  --color-etch-faint: #6b727a; /* rule labels only, never body text */
+  --color-etch-dim: #9aa1a9; /* secondary label. 6.9:1 on rack-800 */
+  --color-etch-faint: #858d95; /* quietest readable label. 5.4:1 / 4.9:1 */
 
-  /* --- Lamps. One law: urgency. ---------------------------------------- */
-  --color-lamp-live: #f0a81e; /* due soon */
-  --color-lamp-over: #e0503a; /* overdue, or impossible */
-  --color-lamp-clear: #4f9d84; /* cleared, or guaranteed */
+  /*
+    --- Lamps. One law: urgency. ----------------------------------------
+    These carry text as well as lamp fills, so each is set light enough to clear
+    4.5:1 on rack-600, the lightest ground any of them sits on.
+  */
+  --color-lamp-live: #f0a81e; /* due soon. 8.5:1 on rack-800 */
+  --color-lamp-over: #ec6b55; /* overdue, or impossible. 5.8:1 / 4.7:1 */
+  --color-lamp-clear: #62b89d; /* cleared, or guaranteed. 6.9:1 / 5.5:1 */
 
   /* --- Unit hues. One law: which unit. --------------------------------- */
   --color-unit-amber: #d99a2b;
@@ -154,7 +166,16 @@
 
   /* A strip with nothing written on it yet: the stock is there, the ink isn't. */
   .strip-pending {
-    background: repeating-linear-gradient(
+    /*
+      background-color first, then the gradient on top. The `background`
+      shorthand alone would leave the computed background-color transparent, so
+      anywhere the gradient does not paint — forced-colors mode, print, an
+      extension overriding background-image — this strip's dark ink would land
+      on the dark rack and become invisible. The flat colour underneath is the
+      floor that keeps it readable.
+    */
+    background-color: var(--color-strip-dim);
+    background-image: repeating-linear-gradient(
       135deg,
       var(--color-strip-dim) 0px,
       var(--color-strip-dim) 6px,
@@ -164,9 +185,28 @@
     color: var(--color-strip-ink);
   }
 
-  /* The ruled channel a row of strips is seated in. */
-  .bay {
-    border-top: 1px solid var(--color-rack-600);
+  /*
+    The rack channel strips are seated in. OWN-WORLD calls for visible bay
+    dividers rather than strips floating on empty gaps: a rack is a ruled
+    structure, and without the rules this reads as a stack of cards.
+
+    The rules sit behind the strips, so the seam between two strips shows the
+    channel they are both seated in rather than a gap between two objects.
+  */
+  .rack-bay {
+    background-color: var(--color-rack-900);
+    background-image: repeating-linear-gradient(
+      180deg,
+      var(--color-rack-600) 0px,
+      var(--color-rack-600) 1px,
+      transparent 1px,
+      transparent 100%
+    );
+    border-block: 1px solid var(--color-rack-600);
+    padding: 3px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
   }
 }
 

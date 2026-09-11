@@ -159,9 +159,14 @@ const gauge = () => page.locator('section', { hasText: 'Where this unit stands' 
 
 const banked = (await gauge().textContent()) ?? '';
 check('gauge reports the banked total', banked.includes('45.3'), 'expected 45.3');
-check('gauge reports the floor-to-ceiling range', banked.includes('45.3–95.3'));
+// Floor and ceiling are marked on the track itself rather than listed as a
+// stat row beneath it, so assert both annotations rather than a joined string.
+check(
+  'gauge marks the floor and the ceiling on the track',
+  banked.includes('45.3') && banked.includes('95.3') && banked.includes('banked'),
+);
 check('gauge reports the average so far', banked.includes('90.6'), 'expected 90.6%');
-check('gauge reports outstanding weight', banked.includes('50'));
+check('gauge reports the graded weight', banked.includes('50'));
 
 // Target D (70): needs 70 - 45.3 = 24.7 from 50 remaining = 49.4%.
 await page.getByRole('button', { name: 'D', exact: true }).click();
@@ -248,6 +253,128 @@ check(
   `14d hides the +38d exam: ${!wide}; 7d keeps the +4d item: ${narrow}`,
 );
 check('overdue survives the narrow window', narrowText.includes('Overdue'));
+
+// --- Accessibility ---------------------------------------------------------
+// CLAUDE.md asks for an a11y pass once a screen is functionally done. These are
+// the checks worth automating; contrast is computed from what actually rendered
+// rather than from the tokens, so a wrong class shows up here.
+function luminance([r, g, b]) {
+  const f = (c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+function contrast(a, b) {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
+const parseRgb = (s) => (s.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number);
+
+for (const [label, url] of [
+  ['board', `${BASE}/`],
+  ['unit', `${BASE}/units/1`],
+  ['settings', `${BASE}/settings`],
+]) {
+  await page.goto(url, { waitUntil: 'networkidle' });
+
+  // Every control must have an accessible name.
+  const unnamed = await page.evaluate(() =>
+    [...document.querySelectorAll('button, a, input, select, textarea')]
+      .filter((el) => {
+        if (el.type === 'hidden') return false;
+        const name =
+          el.getAttribute('aria-label') ||
+          el.getAttribute('title') ||
+          (el.labels?.length ? [...el.labels].map((l) => l.textContent).join('') : '') ||
+          el.textContent ||
+          '';
+        return name.trim() === '';
+      })
+      .map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(' ')[0]}` : ''}`),
+  );
+  check(`${label}: every control has an accessible name`, unnamed.length === 0, unnamed.join(', '));
+
+  // Text contrast, measured on the rendered pixels.
+  const worst = await page.evaluate(() => {
+    const out = [];
+    for (const el of document.querySelectorAll('body *')) {
+      const text = [...el.childNodes]
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.textContent?.trim())
+        .join('');
+      if (!text) continue;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) < 0.5) continue;
+      let bg = 'rgba(0, 0, 0, 0)';
+      let node = el;
+      while (node && bg === 'rgba(0, 0, 0, 0)') {
+        bg = getComputedStyle(node).backgroundColor;
+        if (bg === 'rgba(0, 0, 0, 0)') node = node.parentElement;
+      }
+      const size = parseFloat(cs.fontSize);
+      const bold = Number(cs.fontWeight) >= 700;
+      out.push({
+        text: text.slice(0, 30),
+        fg: cs.color,
+        bg,
+        large: size >= 24 || (bold && size >= 18.66),
+      });
+    }
+    return out;
+  });
+
+  const failures = worst
+    .map((item) => ({
+      ...item,
+      ratio: contrast(parseRgb(item.fg), parseRgb(item.bg)),
+      min: item.large ? 3 : 4.5,
+    }))
+    .filter((item) => item.ratio < item.min);
+
+  check(
+    `${label}: text meets WCAG AA contrast`,
+    failures.length === 0,
+    failures
+      .slice(0, 3)
+      .map((f) => `"${f.text}" ${f.ratio.toFixed(2)}:1 (needs ${f.min})`)
+      .join(' | '),
+  );
+}
+
+// Keyboard: the rack has to be fully operable without a mouse, per PRD §11.
+await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
+await page.getByLabel('Assessment name').first().focus();
+const reachable = [];
+for (let i = 0; i < 8; i++) {
+  await page.keyboard.press('Tab');
+  reachable.push(
+    await page.evaluate(() => {
+      const el = document.activeElement;
+      return el?.getAttribute('aria-label') || el?.tagName.toLowerCase() || '';
+    }),
+  );
+}
+check(
+  'tab walks every field of a strip in order',
+  ['Due date', 'Assessment type', 'Weighting', 'Mark, in weighted points'].every((f) =>
+    reachable.includes(f),
+  ),
+  reachable.join(' → '),
+);
+
+// A visible focus ring on a keyboard-focused control.
+const ring = await page.evaluate(() => {
+  const el = document.activeElement;
+  if (!el) return null;
+  const cs = getComputedStyle(el);
+  return { width: cs.outlineWidth, style: cs.outlineStyle };
+});
+check(
+  'keyboard focus is visible',
+  ring !== null && ring.style !== 'none' && parseFloat(ring.width) > 0,
+  JSON.stringify(ring),
+);
 
 // --- Export (PRD §6.6) -----------------------------------------------------
 {

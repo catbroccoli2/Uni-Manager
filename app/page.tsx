@@ -74,7 +74,7 @@ export default async function BoardPage({ searchParams }: PageProps<'/'>) {
       {overdue.length > 0 ? (
         <section>
           <BayLabel trailing={`${overdue.length}`}>Overdue</BayLabel>
-          <ul className="space-y-1">
+          <ul className="rack-bay">
             {overdue.map((item) => (
               <BoardStrip key={item.id} item={item} today={today} />
             ))}
@@ -103,7 +103,7 @@ export default async function BoardPage({ searchParams }: PageProps<'/'>) {
               : 'Nothing else due in this window.'}
           </EmptyBay>
         ) : (
-          <ul className="space-y-1">
+          <ul className="rack-bay">
             {ahead.map((item) => (
               <BoardStrip key={item.id} item={item} today={today} />
             ))}
@@ -189,9 +189,9 @@ function BoardStrip({
           <span
             className={
               urgency === 'overdue'
-                ? 'font-semibold text-[#8f2f1e]'
+                ? 'font-semibold text-strip-alert'
                 : urgency === 'today' || urgency === 'soon'
-                  ? 'font-medium text-[#8a5a05]'
+                  ? 'font-medium text-strip-warn'
                   : 'text-strip-ink-soft'
             }
           >

@@ -49,6 +49,24 @@ export function GradeGauge({
   const ranges = bandRanges(bands, SCALE_MAX);
   const targetBand = scoreToBand(target, bands);
 
+  /**
+   * The band the unit currently sits in, as a span on the track.
+   *
+   * Anchored on the banked floor rather than the ceiling: the floor is the only
+   * figure that cannot get worse, so it is the honest answer to "where am I".
+   * Null until something is graded — an ungraded unit is not sitting in N, it
+   * simply has no standing yet, and lighting the fail band would say otherwise.
+   */
+  const currentZone = useMemo(() => {
+    if (summary.weightingCompleted <= 0) return null;
+    const band = scoreToBand(summary.worstCase, bands);
+    if (!band) return null;
+    const above = bands
+      .filter((b) => b.minScore > band.minScore)
+      .sort((a, b) => a.minScore - b.minScore)[0];
+    return { code: band.code, from: band.minScore, to: above?.minScore ?? SCALE_MAX };
+  }, [bands, summary.weightingCompleted, summary.worstCase]);
+
   const pct = (n: number) => `${Math.max(0, Math.min(n, SCALE_MAX))}%`;
 
   return (
@@ -58,6 +76,19 @@ export function GradeGauge({
       <div className="px-4 pb-4 pt-1">
         {/* The track. Bare rack is weight that can no longer be reached. */}
         <div className="relative h-11 w-full bg-rack-900">
+          {/*
+            The band currently occupied, lit as a zone you are inside rather than
+            reported as a badge elsewhere. Sits under the stock so it reads as
+            the track's own illumination, not as another layer of content.
+          */}
+          {currentZone ? (
+            <span
+              aria-hidden
+              className="absolute inset-y-0 bg-lamp-live/12"
+              style={{ left: pct(currentZone.from), width: pct(currentZone.to - currentZone.from) }}
+            />
+          ) : null}
+
           <div
             className="absolute inset-y-0 left-0 bg-strip"
             style={{ width: pct(summary.worstCase) }}
@@ -84,6 +115,15 @@ export function GradeGauge({
             ),
           )}
 
+          {/*
+            Banked and ceiling marked on the track itself, so the figures are
+            read where they happen instead of listed as supporting stats below.
+          */}
+          <TrackTick at={summary.worstCase} label="banked" value={round(summary.worstCase)} />
+          {summary.bestCase > summary.worstCase ? (
+            <TrackTick at={summary.bestCase} label="ceiling" value={round(summary.bestCase)} />
+          ) : null}
+
           {/* The target marker. */}
           <span
             aria-hidden
@@ -94,16 +134,24 @@ export function GradeGauge({
           </span>
         </div>
 
-        {/* Band scale beneath the track, aligned to the same 0–100. */}
+        {/*
+          Band scale beneath the track. Only the code is positioned at the
+          threshold; the number rides in a title, because at 390px four labels
+          between 50 and 80 collide if each carries two tokens.
+        */}
         <div className="relative mt-1 h-4 w-full">
           {ranges.map(({ band, min }) => (
             <span
               key={band.code}
-              className="absolute top-0 text-[0.625rem] font-medium text-etch-faint"
+              title={`${band.label} — ${min} and above`}
+              className={[
+                'absolute top-0 text-[0.625rem] font-medium',
+                currentZone?.code === band.code ? 'text-lamp-live' : 'text-etch-faint',
+              ].join(' ')}
               style={{ left: pct(min), transform: min === 0 ? undefined : 'translateX(-50%)' }}
             >
               {band.code}
-              <span className="ml-0.5 font-mono tabular-nums">{min}</span>
+              <span className="ml-0.5 hidden font-mono tabular-nums sm:inline">{min}</span>
             </span>
           ))}
         </div>
@@ -260,26 +308,18 @@ function Readout({
       </div>
       <p className="mt-1 max-w-prose text-sm text-etch-dim">{detail}</p>
 
-      <div className="mt-2.5 flex flex-wrap gap-x-5 gap-y-1 text-xs text-etch-faint">
-        <span>
-          Banked <Figure className="text-etch">{round(summary.pointsEarned)}</Figure>
-        </span>
-        <span>
-          Range{' '}
-          <Figure className="text-etch">
-            {round(summary.worstCase)}–{round(summary.bestCase)}
-          </Figure>
-        </span>
-        {summary.currentAveragePercent !== null ? (
-          <span>
-            Average so far{' '}
-            <Figure className="text-etch">{round(summary.currentAveragePercent)}%</Figure>
-          </span>
-        ) : null}
-        <span>
-          Outstanding <Figure className="text-etch">{round(summary.weightingRemaining)}%</Figure>
-        </span>
-      </div>
+      {/*
+        Only what the track cannot show. Banked and ceiling are marked on the
+        track itself; repeating them here as a stat row is the hero-metric
+        template's tell, and the reviewer called it.
+      */}
+      {summary.currentAveragePercent !== null ? (
+        <p className="mt-2 text-xs text-etch-faint">
+          Averaging{' '}
+          <Figure className="text-etch">{round(summary.currentAveragePercent)}%</Figure> on the{' '}
+          <Figure className="text-etch">{round(summary.weightingCompleted)}%</Figure> graded so far.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -308,6 +348,48 @@ function Warnings({ summary }: { summary: UnitGradeSummary }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * A figure marked where it happens on the track, rather than listed beneath it.
+ * The tick is the rule; the number hangs off it.
+ */
+function TrackTick({ at, label, value }: { at: number; label: string; value: number }) {
+  const clamped = Math.max(0, Math.min(at, SCALE_MAX));
+  /*
+    Both annotations describe the region to the LEFT of their tick — everything
+    banked, everything reachable — so the label sits over what it measures
+    rather than pointing away from it. That also keeps it clear of the target
+    marker, which the reader is actively dragging.
+
+    Below 12 there is no room on the left, so it falls back to the right.
+  */
+  const flip = clamped >= 12;
+  return (
+    <span
+      aria-hidden
+      className="absolute inset-y-0 w-px bg-strip-ink/45"
+      style={{ left: `${clamped}%` }}
+    >
+      {/*
+        The annotation carries its own scrap of stock rather than relying on
+        what happens to sit behind it. On an empty unit both ticks land on bare
+        rack, where dark ink would be invisible; on a full one they land on
+        buff. Giving the label its own ground makes it readable in every case,
+        and a pencilled note on a scrap is what this world does anyway.
+      */}
+      <span
+        className={[
+          'absolute top-0.5 whitespace-nowrap rounded-[1px] bg-strip px-1 py-px',
+          'text-[0.625rem] leading-none',
+          flip ? 'right-0.5 text-right' : 'left-0.5',
+        ].join(' ')}
+      >
+        <span className="font-mono font-medium tabular-nums text-strip-ink">{value}</span>
+        <span className="ml-1 text-strip-ink-soft">{label}</span>
+      </span>
+    </span>
   );
 }
 

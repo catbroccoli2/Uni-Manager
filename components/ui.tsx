@@ -108,6 +108,31 @@ export function Lamp({ tone }: { tone: 'live' | 'over' | 'clear' | 'off' }) {
   return <span aria-hidden className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${fill}`} />;
 }
 
+/**
+ * A drawn back-arrow. The floor refuses a Unicode glyph standing in for an
+ * icon, and "←" is exactly that — it also inherits whatever arrow the reader's
+ * font happens to ship, which is not a design decision anyone made.
+ */
+export function BackLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a
+      href={href}
+      className="inline-flex items-center gap-1.5 text-xs text-etch-dim transition-colors hover:text-etch"
+    >
+      <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden fill="none">
+        <path
+          d="M7.25 2.5L3.75 6l3.5 3.5"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {children}
+    </a>
+  );
+}
+
 /** A figure being measured. Monospace here is for comparison, not decoration. */
 export function Figure({
   children,

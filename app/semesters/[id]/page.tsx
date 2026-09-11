@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { getSemester, getSemesterUnits } from '@/lib/queries';
 import { listGradeBands } from '@/lib/queries';
 import { summariseUnit, scoreToBand } from '@/lib/grades';
-import { BayLabel, EmptyBay, Figure, Lamp } from '@/components/ui';
+import { BackLink, BayLabel, EmptyBay, Figure, Lamp } from '@/components/ui';
 import { UnitPlate } from '@/components/unit-pill';
 import { UnitComposer } from './unit-composer';
 
@@ -25,9 +25,7 @@ export default async function SemesterPage({ params }: PageProps<'/semesters/[id
   return (
     <div className="space-y-8">
       <div>
-        <Link href="/semesters" className="text-xs text-etch-dim hover:text-etch">
-          ← Semesters
-        </Link>
+        <BackLink href="/semesters">Semesters</BackLink>
         <h1 className="mt-1.5 text-2xl font-semibold tracking-tight">{semester.name}</h1>
         <p className="mt-1 text-sm text-etch-dim">
           {semester.year} ·{' '}

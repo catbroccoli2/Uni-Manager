@@ -8,22 +8,49 @@ Personal, local-first web app to track uni semesters, units, assessments, deadli
 
 ## Stack
 
-- Next.js (App Router), TypeScript strict mode
-- Tailwind CSS
-- Drizzle ORM + SQLite (`data/unit-manager.db`, created on first run, gitignored)
+- Next.js 16 (App Router), React 19, TypeScript strict mode
+- Tailwind CSS 4 — CSS-first, no `tailwind.config.js`; design tokens live in an `@theme` block in `app/globals.css`
+- Drizzle ORM + SQLite via libsql (`@libsql/client`), created on first run
+
+**Where the database file lives.** Not `data/unit-manager.db`. It defaults to
+`~/.unimanager/unit-manager.db`, deliberately outside this repo, because this
+project folder is inside OneDrive and file-sync clients corrupt live SQLite
+databases by racing the writer for the `.db` / `.db-wal` / `.db-shm` trio.
+Override with `UNI_MANAGER_DB_PATH` (see `.env.local.example`). If the repo ever
+moves off a synced drive, `./data/unit-manager.db` works fine again.
+
+libsql rather than better-sqlite3: both are native, but libsql ships NAPI
+prebuilds that are ABI-stable, so a Node upgrade can never leave you needing
+Visual Studio Build Tools to compile a database driver. The file it writes is an
+ordinary SQLite database.
 
 ## Commands
 
-Fill this section in once the project is scaffolded, e.g.:
 - `npm run dev` — start dev server
-- `npm run db:generate` / `npm run db:migrate` — Drizzle schema migrations
+- `npm run build` — production build, and the full strict type check
+- `npm test` — grade calculator suite (vitest); the gate on PRD §7 correctness
+- `npm run db:generate` — emit a migration from `db/schema.ts`
+- `npm run db:migrate` — apply pending migrations
+- `npm run db:studio` — browse the database
+- `npm run db:seed:demo` — sample data shaped to exercise the hard cases
+- `npm run verify:ui` — drive the real app in Chrome; needs `npm run dev` running
 
 ## Conventions
 
 - TypeScript strict, no `any`
-- API routes under `app/api/`, DB schema under `db/schema.ts`
+- **Mutations are Server Actions** in `app/**/actions.ts`, not REST routes — agreed
+  with the user as a departure from the original "API routes under `app/api/`"
+  note. The inline assessment table needs optimistic updates without a fetch
+  round-trip, and splitting entities between actions and REST would be worse than
+  choosing one. `app/api/export/route.ts` stays a route handler, because a
+  download is a response carrying `Content-Disposition` and an action cannot
+  return one.
+- DB schema under `db/schema.ts`
 - Keep grade-calculator math in a pure, unit-tested function (`lib/grades.ts`) — no UI code mixed into the calculation logic, since correctness here matters
 - Prefer server components; use client components only where interactivity is needed (inline table editing, calculator inputs)
+- Dates that are calendar days are ISO `'YYYY-MM-DD'` text, never `Date` or epoch
+  integers — see the note at the top of `db/schema.ts` and the helpers in
+  `lib/dates.ts`
 
 ## Key business logic to get right
 
@@ -39,10 +66,44 @@ Fill this section in once the project is scaffolded, e.g.:
 
 ## Skills & plugins
 
-- **Design plugin (frontend-design, accessibility audit, design critique)** — use for any UI/layout/styling work. The goal is a deliberate, non-generic look (see PRD.md §11), not default template styling. Run an accessibility pass once a screen's UI is functionally done.
-- **Modern Web Guidance** — check before writing frontend/Next.js code, especially anything involving forms, modals, layout, or interactive components. Prefer current best practices over older patterns from training data.
+Use these for any UI/layout/styling work. The goal is a deliberate, non-generic
+look (see PRD.md §11), not default template styling.
 
-These should trigger automatically when relevant, but call them out explicitly in a prompt if a UI-heavy task doesn't seem to be using them.
+- **impeccable** (`.claude/skills/impeccable/`) — the main one. Design commands
+  (`critique`, `audit`, `polish`, `harden`, `layout`, `typeset`…), an
+  anti-pattern detector wired to a hook that runs on every UI file edit, and
+  shipped review agents. Run `impeccable detect app components --json` before
+  committing UI work. `reference/craft-floor.md` is the quality floor; load it
+  before any UI edit.
+- **frontend-design** (`.claude/skills/frontend-design/`) — aesthetic direction
+  and typography guidance for new UI.
+- **Modern Web Guidance** (`modern-web-guidance@googlechrome`, declared in
+  `.claude/settings.json`) — check before writing frontend/Next.js code,
+  especially forms, dialogs, layout, and interactive components. Prefer current
+  best practices over older patterns from training data.
+
+Note: the "Design plugin" bundling design critique and accessibility audit is an
+Anthropic plugin for **Claude Cowork**, a different product — it is not
+installable in Claude Code. impeccable covers that ground more thoroughly.
+
+## Design system
+
+This app has a committed visual world, not ad-hoc styling. Before changing any
+UI, read:
+
+- `.impeccable/surfaces/app-units.md` — the direction contract (air traffic
+  control progress strips) and why each decision was made
+- `DESIGN.md` — the built system's tokens and components
+- `PRODUCT.md` — product truth, the confirmed primary job, and what must not be
+  invented
+
+Three laws, recorded in `app/globals.css`. Breaking any one turns this back into
+a generic dashboard:
+
+1. Buff is the only large light field, and always means "a real record".
+2. Every colour channel states exactly one thing — unit hue is identity, lamp is
+   urgency. Never decoration, never emphasis.
+3. A strip's size is its weighting. Size is data, not layout convenience.
 
 ## Build order
 

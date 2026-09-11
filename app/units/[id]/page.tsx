@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getUnit, listGradeBands } from '@/lib/queries';
 import { UnitPlate } from '@/components/unit-pill';
-import { BayLabel } from '@/components/ui';
+import { BackLink, BayLabel } from '@/components/ui';
 import { UnitWorkspace } from '@/components/unit-workspace';
 import { UnitSettings } from './unit-settings';
 
@@ -19,12 +19,7 @@ export default async function UnitPage({ params }: PageProps<'/units/[id]'>) {
   return (
     <div className="space-y-8">
       <div>
-        <Link
-          href={`/semesters/${unit.semesterId}`}
-          className="text-xs text-etch-dim hover:text-etch"
-        >
-          ← {unit.semester.name}
-        </Link>
+        <BackLink href={`/semesters/${unit.semesterId}`}>{unit.semester.name}</BackLink>
         <div className="mt-1.5 flex flex-wrap items-center gap-3">
           <UnitPlate color={unit.color} code={unit.code} name={unit.name} />
           <h1 className="text-2xl font-semibold tracking-tight">{unit.name}</h1>

@@ -59,7 +59,7 @@ export function AssessmentRack({
           </div>
         </div>
       ) : (
-        <ul className="space-y-1">
+        <ul className="rack-bay">
           {rows.map((row) => (
             <Strip
               key={row.id}
@@ -203,9 +203,9 @@ function Strip({
                 className={[
                   'mt-0.5 block text-[0.625rem] leading-tight',
                   urgency === 'overdue'
-                    ? 'font-semibold text-[#8f2f1e]'
+                    ? 'font-semibold text-strip-alert'
                     : urgency === 'today' || urgency === 'soon'
-                      ? 'font-medium text-[#8a5a05]'
+                      ? 'font-medium text-strip-warn'
                       : 'text-strip-ink-soft',
                 ].join(' ')}
               >
