@@ -138,11 +138,21 @@ This is the feature you specifically asked for, spelled out precisely so it gets
   and a confidence, unrecognised lines are listed rather than dropped, and text
   with no assessment table produces an empty draft instead of an invented one.
 
-  The trade: it only reads text that can be selected and copied. A **scanned**
-  outline gives it nothing, and unusual layouts confuse it. The Claude API path
-  in the original spec would handle both, and remains the upgrade if that ever
-  matters.
-- **Public deployment path** — swap SQLite for hosted Postgres, deploy to Vercel, only if wanted later
+  **PDF upload works too, and is still free.** PDF.js runs in the browser and
+  pulls out a PDF's text layer with no upload, no server and no API — choose or
+  drop the file and it fills the box for you. Pasting remains available for
+  anything else.
+
+  The trade: it only reads text that exists as text. A **scanned** outline — a
+  PDF of photographs — has no text layer, and the app says so rather than
+  guessing. Reading one would need OCR. The Claude API path in the original spec
+  would handle that, and remains the only reason to revisit it.
+- ~~**Public deployment path** — swap SQLite for hosted Postgres, deploy to Vercel~~
+
+  **Out of scope, decided.** Not wanted: there is nothing to pay for and nothing
+  to host. Anyone who wants to use it clones the repo and runs it locally, which
+  is what a local-first app should make easy. Drizzle keeps the door open — the
+  Postgres swap stays a config change rather than a rewrite — if that ever changes.
 
 ## 10. Tech stack
 

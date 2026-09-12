@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseOutline } from './outline-parser';
+import { REAL_OUTLINE } from './__fixtures__/real-outline';
 
 /**
  * Fixtures are shaped like real pasted outlines, not like convenient input.
@@ -363,5 +364,66 @@ describe('parseOutline — normalising', () => {
   it('takes the year from the semester when the date omits it', () => {
     const draft = parseOutline('Essay 1 30% 14 April', { semesterStart: '2026-03-02' });
     expect(draft.assessments[0]?.dueDate).toBe('2026-04-14');
+  });
+});
+
+describe('parseOutline — a real outline (COS20007)', () => {
+  const draft = parseOutline(REAL_OUTLINE, { semesterStart: '2026-02-15' });
+
+  it('reads a five-digit unit code', () => {
+    expect(draft.unit.code).toBe('COS20007');
+  });
+
+  it('reads the title from a label/value summary table', () => {
+    expect(draft.unit.name).toBe('Object Oriented Programming');
+  });
+
+  it('reads fractional credit points', () => {
+    expect(draft.unit.creditPoints).toBe(12.5);
+  });
+
+  it('finds the four real assessments and nothing else', () => {
+    const names = draft.assessments.filter((a) => !a.isSubItem).map((a) => a.name);
+    expect(names).toEqual([
+      'Weekly in-class tasks',
+      'In-class mid-term Test',
+      'In-class final Test',
+      'Assignment Interview',
+    ]);
+  });
+
+  it('totals exactly 100% across the real assessments', () => {
+    const total = draft.assessments
+      .filter((a) => !a.isSubItem)
+      .reduce((sum, a) => sum + a.weighting, 0);
+    expect(total).toBe(100);
+  });
+
+  it('marks the weekly breakdown rows as sub-items, not assessments', () => {
+    const subs = draft.assessments.filter((a) => a.isSubItem);
+    expect(subs).toHaveLength(11);
+    expect(subs.every((a) => a.confidence === 'low')).toBe(true);
+    // They add up to their parent, which is the point: importing both double counts.
+    expect(Math.round(subs.reduce((s, a) => s + a.weighting, 0))).toBe(40);
+  });
+
+  it('ignores percentages in prose', () => {
+    const names = draft.assessments.map((a) => a.name.toLowerCase()).join(' | ');
+    for (const phrase of ['if you', 'unlock', 'eligible', 'education plan', 'aggregate']) {
+      expect(names).not.toContain(phrase);
+    }
+  });
+
+  it('ignores a grading-band range like "10% – 50%"', () => {
+    expect(draft.assessments.some((a) => a.weighting === 70)).toBe(false);
+    expect(draft.assessments.map((a) => a.name).join(' ')).not.toContain('partially');
+  });
+
+  it('ignores the Total row', () => {
+    expect(draft.assessments.some((a) => /^total$/i.test(a.name))).toBe(false);
+  });
+
+  it('does not mistake contact-hours rows for assessments', () => {
+    expect(draft.assessments.map((a) => a.name).join(' ')).not.toContain('On-campus');
   });
 });

@@ -44,6 +44,12 @@ export interface DraftAssessment extends Traced {
   weighting: number;
   maxMark: number;
   type: AssessmentType;
+  /**
+   * True for a bulleted breakdown row whose weighting is already counted in a
+   * parent row above it. Importing both double counts the same work, so the
+   * review defaults these off.
+   */
+  isSubItem: boolean;
 }
 
 export interface DraftTimetableEntry extends Traced {
@@ -171,13 +177,43 @@ function isWorthReporting(line: string): boolean {
 /* Unit details                                                                */
 /* -------------------------------------------------------------------------- */
 
-const UNIT_CODE = /\b([A-Z]{2,4}\s?\d{4})\b/;
+/**
+ * Two to four letters and four or five digits. Five is not unusual — Swinburne
+ * uses COS20007, SWE20004, INF10016 — and a four-digit-only pattern silently
+ * matches nothing on a whole institution's outlines.
+ */
+const UNIT_CODE = /\b([A-Z]{2,4}\s?\d{4,5})\b/;
 const CREDIT_POINTS = /(\d+(?:\.\d+)?)\s*(?:credit\s*points?|\bcp\b)/i;
+
+/** `Unit Title  Object Oriented Programming` — a summary table's label/value row. */
+const TITLE_LABEL = /^unit\s*(?:title|name)s?\s*[:\-–—]?\s*(.+)$/i;
+const CODE_LABEL = /^unit\s*codes?\s*(?:\(s\))?\s*[:\-–—]?\s*(.+)$/i;
 
 function readUnit(lines: string[], used: Set<number>): OutlineDraft['unit'] {
   let code: string | null = null;
   let name: string | null = null;
   let creditPoints: number | null = null;
+
+  /*
+    A labelled summary table beats anything inferred from position. "Unit Title
+    Object Oriented Programming" states the answer outright, where guessing at
+    the line after the code can pick up a study period or a department.
+  */
+  for (const [index, line] of lines.entries()) {
+    const titled = TITLE_LABEL.exec(line);
+    if (titled?.[1] && name === null && looksLikeUnitName(tidy(titled[1]))) {
+      name = tidy(titled[1]);
+      used.add(index);
+    }
+    const coded = CODE_LABEL.exec(line);
+    if (coded?.[1] && code === null) {
+      const inner = UNIT_CODE.exec(coded[1]);
+      if (inner?.[1]) {
+        code = inner[1].replace(/\s/g, '');
+        used.add(index);
+      }
+    }
+  }
 
   for (const [index, line] of lines.entries()) {
     if (code === null) {
@@ -187,16 +223,13 @@ function readUnit(lines: string[], used: Set<number>): OutlineDraft['unit'] {
         used.add(index);
 
         // The unit's name usually sits beside its code, or on the next line.
-        const beside = line
-          .replace(match[0], ' ')
-          .replace(/^[\s\-–—:|]+|[\s\-–—:|]+$/g, '')
-          .trim();
-        if (looksLikeUnitName(beside)) {
+        const beside = tidy(line.replace(match[0], ' ').replace(/^[\s\-–—:|]+|[\s\-–—:|]+$/g, ''));
+        if (name === null && looksLikeUnitName(beside)) {
           name = beside;
-        } else {
+        } else if (name === null) {
           const next = lines[index + 1];
-          if (next && looksLikeUnitName(next)) {
-            name = next;
+          if (next && looksLikeUnitName(tidy(next))) {
+            name = tidy(next);
             used.add(index + 1);
           }
         }
@@ -249,7 +282,7 @@ function readAssessments(
   used: Set<number>,
   semesterStart: string | null,
 ): DraftAssessment[] {
-  const drafts: DraftAssessment[] = [];
+  const drafts: (DraftAssessment & { fromTable: boolean })[] = [];
 
   for (const [index, line] of lines.entries()) {
     if (used.has(index)) continue;
@@ -296,13 +329,23 @@ function readAssessments(
       "Students must achieve 50% overall to pass this unit." carries a
       percentage and a readable name, and is not an assessment. A line earns a
       row only if something corroborates it: a date, an "out of", a table
-      column, or a name that reads like an assessment title.
+      column, or a name that reads like an assessment title — and never if it
+      reads as prose about marks, which a real outline is full of.
     */
+    if (looksLikeProse(line)) continue;
+    if (isTotalRow(name)) continue;
     if (dated === null && outOf === null && !isTabular(line) && !looksLikeTaskName(name)) {
       continue;
     }
+
+    const isSubItem = BULLET.test(line);
+    if (isSubItem) name = name.replace(BULLET, '').trim();
+
     if (dated === null && outOf === null) confidence = 'low';
     if (dated?.confidence === 'low') confidence = 'low';
+    // A breakdown row is always worth a second look: taking it AND its parent
+    // counts the same work twice.
+    if (isSubItem) confidence = 'low';
 
     used.add(index);
     used.add(nameLine);
@@ -310,6 +353,7 @@ function readAssessments(
 
     drafts.push({
       name: tidy(name),
+      isSubItem,
       dueDate: dated?.iso ?? null,
       weighting: clampNumber(weighting, 0, 100),
       // Defaults to 100 for the same reason the rack does: an outline that does
@@ -318,10 +362,37 @@ function readAssessments(
       type: readType(line, name),
       sourceLine: tidy(line),
       confidence,
+      fromTable: isTabular(line),
     });
   }
 
-  return drafts;
+  return dropSummaryDuplicates(drafts).map(({ fromTable, ...row }) => {
+    void fromTable;
+    return row;
+  });
+}
+
+/**
+ * Drops a prose summary that restates the assessment table.
+ *
+ * Outlines routinely carry both: an "Assessment Summary" paragraph near the
+ * front ("Mid-Semester Test 10%, Major Assignment 30%, and…") and the real
+ * table later. Read literally, that is every assessment twice and a unit at
+ * 200%.
+ *
+ * The table wins, because it has columns the prose does not — an
+ * Individual/Group cell, a due-date cell, real column gaps. A prose row is
+ * dropped only when a table row already claims the same weighting, so an
+ * outline that has ONLY the summary still yields its assessments rather than
+ * nothing.
+ */
+function dropSummaryDuplicates(
+  drafts: (DraftAssessment & { fromTable: boolean })[],
+): (DraftAssessment & { fromTable: boolean })[] {
+  const claimedByTable = new Set(
+    drafts.filter((row) => row.fromTable && !row.isSubItem).map((row) => row.weighting),
+  );
+  return drafts.filter((row) => row.fromTable || !claimedByTable.has(row.weighting));
 }
 
 /** Collapses the column spacing kept through normalising, for display. */
@@ -329,9 +400,58 @@ function tidy(value: string): string {
   return value.replace(/\s{2,}/g, ' ').trim();
 }
 
-/** A line that still carries the column gaps of the table it came from. */
+/**
+ * A line that still carries the column gaps of the table it came from, or an
+ * Individual/Group column — the one field only an assessment table has.
+ */
 function isTabular(line: string): boolean {
-  return /\s{2,}/.test(line);
+  return /\s{2,}/.test(line) || /\b(individual|group|team[-\s]?based)\b/i.test(line);
+}
+
+/**
+ * Prose that happens to contain a percentage.
+ *
+ * A real outline is mostly prose, and much of it is about marks: grading bands
+ * ("10% – 50% – If you partially complete…"), attendance thresholds ("attend
+ * more than 50% of the total weekly lab sessions"), hurdles, and extra-time
+ * allowances. Every one of those carries a percentage and a name that mentions
+ * a lab or a test, which is exactly what an assessment row looks like from a
+ * regex's point of view.
+ *
+ * Sentences are what separates them, so this looks for sentence machinery.
+ */
+const PROSE_SIGNALS =
+  /\b(if you|you must|you may|will be|must (?:be|attend|complete)|should|please|refer to|available|determined|granted|eligible|required to|in order to|at least|more than|up to|no later|aggregate)\b/i;
+
+/** A percentage that is qualified rather than assigned: "at least 50%", "extra 50%". */
+const QUALIFIED_PERCENT =
+  /\b(at least|more than|less than|up to|extra|minimum|maximum|over|under|around|about|aggregate(?: mark)? of)\s+\d{1,3}(?:\.\d+)?\s*%/i;
+
+/** A band like "10% – 50%": two percentages joined by a dash is a range, not a weight. */
+const PERCENT_RANGE = /\d{1,3}(?:\.\d+)?\s*%\s*[-–—]\s*\d{1,3}(?:\.\d+)?\s*%/;
+
+function looksLikeProse(line: string): boolean {
+  if (PERCENT_RANGE.test(line)) return true;
+  if (QUALIFIED_PERCENT.test(line)) return true;
+  if (PROSE_SIGNALS.test(line)) return true;
+  // A long line ending in a full stop is a sentence, not a table cell.
+  const words = line.split(/\s+/).length;
+  return words >= 10 && /[.]$/.test(line.trim());
+}
+
+/**
+ * A bulleted breakdown row: `• W2 tasks Individual 4% … In-class Week 2`.
+ *
+ * These are the single most damaging thing to get wrong. They sum to a parent
+ * row's weighting, so importing both counts the same work twice and pushes the
+ * unit past 100. They are kept — the user may want the detail rather than the
+ * summary — but marked as sub-items so the review can default them off.
+ */
+const BULLET = /^[•·▪◦○*•●▪]\s*/;
+
+/** Rows that are a table's own arithmetic, not work anybody does. */
+function isTotalRow(name: string): boolean {
+  return /^(total|subtotal|overall|sum)\b/i.test(name.trim());
 }
 
 const TASK_WORDS =
@@ -387,6 +507,9 @@ function readName(line: string): string | null {
   let candidate = line.slice(0, match.index);
   candidate = candidate
     .replace(/\b(assessment|task|item)\s+(type|name|title)\b\s*[:\-–—]?/i, '')
+    // The Individual/Group column sits between the name and the weighting, so
+    // it lands inside the name unless it is taken off the end.
+    .replace(/\s*\b(individual|group|team[-\s]?based|pair)\b\s*$/i, '')
     .replace(/[\s\-–—:|.]+$/g, '')
     .trim();
 

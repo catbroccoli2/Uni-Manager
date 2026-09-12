@@ -43,6 +43,8 @@ export function ImportWorkspace({
   existingUnits: ExistingUnit[];
 }) {
   const [text, setText] = useState('');
+  const [reading, setReading] = useState(false);
+  const [fileNote, setFileNote] = useState<string | null>(null);
   const [draft, setDraft] = useState<OutlineDraft | null>(null);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +57,35 @@ export function ImportWorkspace({
   const [creditPoints, setCreditPoints] = useState('');
   const [color, setColor] = useState<UnitColor>('violet');
   const [targetUnitId, setTargetUnitId] = useState<number | null>(null);
+
+  /**
+   * Reads a dropped or chosen PDF in the browser and fills the textarea with
+   * its text. Nothing is uploaded — PDF.js runs client-side — so this stays as
+   * local as pasting, and the file never leaves the machine.
+   */
+  async function readPdf(file: File) {
+    setError(null);
+    setFileNote(null);
+    setReading(true);
+    try {
+      const { extractPdfText } = await import('@/lib/pdf-text');
+      const result = await extractPdfText(file);
+
+      if (result.looksScanned) {
+        setFileNote(
+          `${file.name} has no text layer — it is almost certainly a scan. There is nothing to ` +
+            'read without OCR, so paste the text by hand if you can select it elsewhere.',
+        );
+        return;
+      }
+      setText(result.text);
+      setFileNote(`Read ${result.pageCount} pages from ${file.name}.`);
+    } catch {
+      setError('Could not read that PDF. Try copying its text and pasting instead.');
+    } finally {
+      setReading(false);
+    }
+  }
 
   function read() {
     setError(null);
@@ -72,7 +103,10 @@ export function ImportWorkspace({
     setTargetUnitId(match?.id ?? null);
 
     const initial: Record<string, boolean> = {};
-    parsed.assessments.forEach((_, i) => (initial[`a${i}`] = true));
+    // Breakdown rows start off. Their weightings are already counted in the
+    // parent row above them, so importing both counts the same work twice and
+    // pushes the unit past 100.
+    parsed.assessments.forEach((row, i) => (initial[`a${i}`] = !row.isSubItem));
     parsed.timetable.forEach((_, i) => (initial[`t${i}`] = true));
     // Readings are the weakest extraction, so they start unticked: opting in is
     // a smaller mistake than importing a paragraph that was never a reading.
@@ -142,8 +176,45 @@ export function ImportWorkspace({
   if (draft === null) {
     return (
       <section>
-        <BayLabel>Paste the outline</BayLabel>
+        <BayLabel trailing="PDF or plain text">Load the outline</BayLabel>
         <div className="space-y-3">
+          {/*
+            The PDF is read in this browser by PDF.js. It is never uploaded, so
+            this path is exactly as offline as pasting.
+          */}
+          <div
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              const file = event.dataTransfer.files[0];
+              if (file) void readPdf(file);
+            }}
+            className="flex flex-wrap items-center gap-3 border border-dashed border-rack-600 px-4 py-3"
+          >
+            <label className="cursor-pointer rounded-[1px] bg-rack-700 px-3 py-1.5 text-sm text-etch transition-colors hover:bg-rack-600">
+              {reading ? 'Reading…' : 'Choose a PDF'}
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                className="sr-only"
+                aria-label="Outline PDF"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void readPdf(file);
+                }}
+              />
+            </label>
+            <span className="text-xs text-etch-faint">
+              or drop one here. It is read in your browser and never uploaded.
+            </span>
+          </div>
+
+          {fileNote ? (
+            <p role="status" className="text-xs text-lamp-live">
+              {fileNote}
+            </p>
+          ) : null}
+
           <label className="block">
             <span className="sr-only">Outline text</span>
             <textarea
@@ -271,6 +342,13 @@ export function ImportWorkspace({
           >
             Assessments
           </BayLabel>
+          {draft.assessments.some((a) => a.isSubItem) ? (
+            <p className="mb-2 max-w-prose text-xs text-etch-faint">
+              Rows marked <span className="text-etch-dim">breakdown</span> are the itemised parts
+              of a row above them — their weightings are already counted in the parent. They start
+              switched off; tick them only if you want the detail instead of the summary.
+            </p>
+          ) : null}
           {overAllowance ? (
             <p className="mb-2 text-xs text-lamp-live">
               These weightings total more than the {allowance}% available
@@ -290,8 +368,13 @@ export function ImportWorkspace({
                   onChange={(next) => setKeep((k) => ({ ...k, [`a${index}`]: next }))}
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-strip-ink">
-                    {row.name}
+                  <span className="flex items-baseline gap-2">
+                    <span className="truncate text-sm font-medium text-strip-ink">{row.name}</span>
+                    {row.isSubItem ? (
+                      <span className="shrink-0 rounded-[1px] border border-strip-ink/40 px-1 py-px text-[0.625rem] text-strip-ink-soft">
+                        breakdown
+                      </span>
+                    ) : null}
                   </span>
                   <Evidence row={row} />
                 </span>

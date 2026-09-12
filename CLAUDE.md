@@ -90,8 +90,20 @@ are load-bearing:
 - **Show the evidence.** Every row carries its `sourceLine` and a `confidence`,
   and the review sorts low-confidence rows first.
 
+`lib/pdf-text.ts` adds PDF input on the same terms: PDF.js runs client-side, so
+the file is never uploaded. A scanned PDF has no text layer and is reported as
+such rather than guessed at.
+
 `commitOutlineDraft` re-validates everything server-side and caps weightings at
 100 — a draft that crossed the wire from a heuristic parser is never trusted.
+
+**`lib/__fixtures__/real-outline.ts` is the important test.** It is a real
+outline, kept verbatim, and every hard-won rule in the parser exists because of
+something in it: five-digit unit codes, a label/value summary table, bulleted
+sub-rows that break down a parent's weighting, a prose summary that restates the
+whole table, and pages of grading bands and attendance thresholds that all carry
+percentages. When the parser gets something wrong on a new outline, add that
+outline as a fixture before changing any rule.
 
 This shipped as the offline variant of PRD.md §9, so **the Claude API exception
 below remains unspent**. If the API path is ever built (for scanned outlines), it
@@ -146,4 +158,13 @@ a generic dashboard:
 
 ## Build order
 
-Follow `PRD.md` §6 (MVP) → §8 (Phase 2) → §9 (Phase 3/stretch), in that order. Confirm with the user before starting a new phase.
+`PRD.md` §6 (MVP) is done. §9's outline parsing shipped as an offline variant.
+
+Next is **§8 (Phase 2)**: weekly timetable view, calendar merging classes and
+deadlines, WAM weighted by credit points, the searchable content library, and
+the quick-capture inbox.
+
+**§9's remaining items are out of scope by decision**: the Claude API parsing
+path (costs money; the offline parser covers text-based outlines) and public
+deployment (not wanted — users clone the repo and run it locally). Do not start
+either without the user asking.

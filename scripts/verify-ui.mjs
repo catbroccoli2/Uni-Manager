@@ -11,7 +11,7 @@
  */
 import { chromium } from 'playwright-core';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -428,6 +428,37 @@ Final Examination               30%         19/06/2026
 Consultation is by appointment with the unit coordinator.`;
 
 await page.goto(`${BASE}/semesters/1/import`, { waitUntil: 'networkidle' });
+
+// PDF.js runs in the browser: a chosen file must fill the textarea without any
+// upload. Uses a real PDF from disk when one is present, since a synthetic one
+// would not exercise the text-layer extraction that matters.
+// Forward slashes: Windows accepts them, and they survive being a JS string
+// literal, where `\U` and `\D` would silently become `U` and `D`.
+const SAMPLE_PDF = 'C:/Users/catbr/Downloads/MarkingRubricSummary.pdf';
+if (existsSync(SAMPLE_PDF)) {
+  await page.setInputFiles('input[type="file"]', SAMPLE_PDF);
+  await page.waitForFunction(
+    () => {
+      const area = document.querySelector('textarea');
+      return (area?.value.length ?? 0) > 100;
+    },
+    undefined,
+    { timeout: 30000 },
+  );
+  const extracted = await page.locator('textarea').inputValue();
+  check(
+    'a PDF is read in the browser, with no upload',
+    extracted.length > 100,
+    `${extracted.length} characters extracted`,
+  );
+  check(
+    'the PDF read reports how many pages it got',
+    ((await page.locator('body').textContent()) ?? '').includes('Read '),
+  );
+} else {
+  console.log('SKIP  PDF extraction (no sample PDF on this machine)');
+}
+
 await page.getByLabel('Outline text').fill(OUTLINE);
 await page.getByRole('button', { name: 'Read the outline' }).click();
 await page.waitForTimeout(600);
