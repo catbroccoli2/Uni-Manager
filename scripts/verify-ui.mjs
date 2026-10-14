@@ -205,9 +205,12 @@ check('new unit survives a fresh load', (await page.getByText(unitName).count())
 
 // --- The rack: inline editing ---------------------------------------------
 await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
-check('rack renders a strip per assessment', (await page.locator('li.strip').count()) === 4);
+// Scoped to the assessments bay: the unit page now also renders class-time
+// strips, so a bare `li.strip` counts both.
+const rack = () => page.locator('section', { hasText: 'Assessments' }).last().locator('li.strip');
+check('rack renders a strip per assessment', (await rack().count()) === 4);
 
-const firstStrip = () => page.locator('li.strip').first();
+const firstStrip = () => rack().first();
 
 const newName = `Renamed ${Date.now()}`;
 const nameCell = firstStrip().getByLabel('Assessment name');
@@ -244,7 +247,7 @@ check(
 );
 
 // Change it to 18 out of 25 on the 40% assessment: (18/25)*40 = 28.8
-const second = page.locator('li.strip').nth(1);
+const second = rack().nth(1);
 await second.getByLabel('Mark earned').fill('18');
 await second.getByLabel('Mark earned').blur();
 await page.waitForTimeout(500);
@@ -272,17 +275,17 @@ await page.waitForTimeout(900);
 await page.reload({ waitUntil: 'networkidle' });
 check(
   'a cleared "out of" falls back to 100 rather than zeroing the row',
-  (await page.locator('li.strip').nth(1).getByLabel('Mark is out of').inputValue()) === '100',
+  (await rack().nth(1).getByLabel('Mark is out of').inputValue()) === '100',
 );
-await page.locator('li.strip').nth(1).getByLabel('Mark is out of').fill('25');
-await page.locator('li.strip').nth(1).getByLabel('Mark is out of').blur();
+await rack().nth(1).getByLabel('Mark is out of').fill('25');
+await rack().nth(1).getByLabel('Mark is out of').blur();
 await page.waitForTimeout(900);
 
 // --- The weighting cap -----------------------------------------------------
 // Seeded weightings are 10 + 40 + 20 + 30 = 100. For the second row, the OTHER
 // rows already take 10 + 20 + 30 = 60, so its allowance is 40.
 await page.reload({ waitUntil: 'networkidle' });
-const weightCell = page.locator('li.strip').nth(1).getByLabel(/^Weighting/);
+const weightCell = rack().nth(1).getByLabel(/^Weighting/);
 await weightCell.fill('95');
 await weightCell.blur();
 await page.waitForTimeout(900);
@@ -293,14 +296,14 @@ check(
   cappedText.match(/Capped[^.]*\./)?.[0],
 );
 await page.reload({ waitUntil: 'networkidle' });
-const cappedValue = await page.locator('li.strip').nth(1).getByLabel(/^Weighting/).inputValue();
+const cappedValue = await rack().nth(1).getByLabel(/^Weighting/).inputValue();
 check('the capped weighting saved as the allowance, not the typed value', cappedValue === '40', cappedValue);
 check(
   'total weighting never exceeds 100',
   ((await page.locator('body').textContent()) ?? '').includes('Weight 100/100'),
 );
-await page.locator('li.strip').nth(1).getByLabel(/^Weighting/).fill('40');
-await page.locator('li.strip').nth(1).getByLabel(/^Weighting/).blur();
+await rack().nth(1).getByLabel(/^Weighting/).fill('40');
+await rack().nth(1).getByLabel(/^Weighting/).blur();
 await page.waitForTimeout(900);
 
 // --- Achieved grade, beside the target ------------------------------------
@@ -520,8 +523,8 @@ check(
 );
 check(
   'imported assessments default to out-of-100 and ungraded',
-  (await page.locator('li.strip').first().getByLabel('Mark is out of').inputValue()) === '100' &&
-    (await page.locator('li.strip').first().getByLabel('Mark earned').inputValue()) === '',
+  (await rack().first().getByLabel('Mark is out of').inputValue()) === '100' &&
+    (await rack().first().getByLabel('Mark earned').inputValue()) === '',
 );
 
 // Re-importing the same outline must offer to merge rather than duplicate.
@@ -551,6 +554,74 @@ check(
   await page.getByRole('button', { name: 'Import', exact: true }).isDisabled(),
 );
 
+// --- Timetable (PRD §8) ----------------------------------------------------
+await page.goto(`${BASE}/timetable`, { waitUntil: 'networkidle' });
+const week = (await page.locator('body').textContent()) ?? '';
+check('timetable renders the seeded classes', week.includes('BUSM2301') && week.includes('STAT1020'));
+check('timetable shows class types', week.includes('lecture') && week.includes('tutorial'));
+check('timetable shows locations', week.includes('Computer Lab 4'));
+
+// Deadlines share the grid, which is why the week has to be a real one.
+const dueBand = await page.locator('span', { hasText: /^due$/ }).count();
+check('deadlines ride in their own band above the clock', dueBand > 0);
+
+// Week navigation must actually move, and "This week" must come back.
+const thisWeekLabel = await page.locator('nav[aria-label="Week"]').textContent();
+await page.getByRole('link', { name: 'Next week' }).click();
+await page.waitForURL(/week=/, { timeout: 10000 });
+const nextLabel = await page.locator('nav[aria-label="Week"]').textContent();
+check('next week changes the displayed range', nextLabel !== thisWeekLabel, `${thisWeekLabel?.trim()} -> ${nextLabel?.trim()}`);
+check('a moved week is held in the URL', page.url().includes('week='));
+await page.getByRole('link', { name: 'This week' }).click();
+await page.waitForURL((url) => !url.search.includes('week='), { timeout: 10000 });
+check(
+  'This week returns to the current range',
+  (await page.locator('nav[aria-label="Week"]').textContent()) === thisWeekLabel,
+);
+
+// Classes are edited on the unit page, and the grid must reflect an edit.
+await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
+check(
+  'the unit page lists its class times as editable rows',
+  (await page.getByLabel('Location').count()) >= 2,
+);
+const location = page.getByLabel('Location').first();
+await location.fill('Moved Room 99');
+await page.waitForTimeout(900);
+await page.goto(`${BASE}/timetable`, { waitUntil: 'networkidle' });
+check(
+  'editing a class on the unit page reaches the week grid',
+  ((await page.locator('body').textContent()) ?? '').includes('Moved Room 99'),
+);
+
+// Adding and removing a class round-trips.
+await page.goto(`${BASE}/units/1`, { waitUntil: 'networkidle' });
+const classesBefore = await page.getByLabel('Location').count();
+await page.getByRole('button', { name: 'Add a class' }).first().click();
+await page.waitForFunction(
+  (n) => document.querySelectorAll('input[aria-label="Location"]').length > n,
+  classesBefore,
+  { timeout: 10000 },
+);
+check('a class can be added', true);
+await page.getByRole('button', { name: /^Remove the/ }).last().click();
+await page.waitForFunction(
+  (n) => document.querySelectorAll('input[aria-label="Location"]').length === n,
+  classesBefore,
+  { timeout: 10000 },
+);
+check('a class can be removed', true);
+
+// The board carries today only, not the whole week.
+await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+const boardToday = (await page.locator('body').textContent()) ?? '';
+const hasTodayClasses = boardToday.includes('Whole week');
+check(
+  'the board links to the week when today has classes',
+  hasTodayClasses || !boardToday.includes('Today'),
+  hasTodayClasses ? 'today strip present' : 'no classes today, strip correctly hidden',
+);
+
 // --- Accessibility ---------------------------------------------------------
 function luminance([r, g, b]) {
   const f = (c) => {
@@ -571,6 +642,7 @@ for (const [label, url] of [
   ['settings', `${BASE}/settings`],
   ['semester', `${BASE}/semesters/1`],
   ['import', `${BASE}/semesters/1/import`],
+  ['timetable', `${BASE}/timetable`],
 ]) {
   await page.goto(url, { waitUntil: 'networkidle' });
 
@@ -675,6 +747,7 @@ for (const [name, url] of [
   ['unit', `${BASE}/units/1`],
   ['settings', `${BASE}/settings`],
   ['import', `${BASE}/semesters/1/import`],
+  ['timetable', `${BASE}/timetable`],
 ]) {
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.screenshot({ path: `${OUT}/${name}-desktop.png`, fullPage: true });
@@ -685,15 +758,26 @@ for (const [name, url] of [
   ['board', `${BASE}/`],
   ['semester-detail', `${BASE}/semesters/1`],
   ['unit', `${BASE}/units/1`],
+  ['timetable', `${BASE}/timetable`],
 ]) {
   await mobile.goto(url, { waitUntil: 'networkidle' });
   await mobile.screenshot({ path: `${OUT}/${name}-mobile.png`, fullPage: true });
 }
 
-const overflow = await mobile.evaluate(
-  () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+const overflowReport = await mobile.evaluate(() => {
+  const limit = document.documentElement.clientWidth;
+  const overflow = document.documentElement.scrollWidth - limit;
+  const culprits = [...document.querySelectorAll('body *')]
+    .filter((el) => el.getBoundingClientRect().right > limit + 1)
+    .slice(0, 3)
+    .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).split(' ')[0]}`);
+  return { overflow, culprits };
+});
+check(
+  'no horizontal overflow at 390px',
+  overflowReport.overflow <= 0,
+  `overflow ${overflowReport.overflow}px — ${overflowReport.culprits.join(', ')}`,
 );
-check('no horizontal overflow at 390px', overflow <= 0, `overflow ${overflow}px`);
 
 await browser.close();
 stopServer();

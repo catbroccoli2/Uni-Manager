@@ -1,9 +1,24 @@
+
 import Link from 'next/link';
-import { getCurrentSemesterUnits, getDueAssessments, listGradeBands } from '@/lib/queries';
+import {
+  getCurrentSemesterUnits,
+  getDueAssessments,
+  getWeekSchedule,
+  listGradeBands,
+  getAllUnits,
+} from '@/lib/queries';
 import { gradePointAverage, summariseUnit, unitStanding } from '@/lib/grades';
+import { TodayClasses } from '@/components/today-classes';
 import { BayLabel, EmptyBay, Figure, Lamp } from '@/components/ui';
 import { UnitPlate } from '@/components/unit-pill';
-import { describeDueDate, dueUrgency, formatDueDate, todayIso } from '@/lib/dates';
+import {
+  describeDueDate,
+  dueUrgency,
+  formatDueDate,
+  isoWeekday,
+  startOfWeekIso,
+  todayIso,
+} from '@/lib/dates';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,11 +44,19 @@ export default async function BoardPage({ searchParams }: PageProps<'/'>) {
   const days = readWindow(params.days);
   const today = todayIso();
 
-  const [due, current, bands] = await Promise.all([
+    const [due, current, bands, week, allUnits] = await Promise.all([
     getDueAssessments(days),
     getCurrentSemesterUnits(),
     listGradeBands(),
+    getWeekSchedule(startOfWeekIso(today)),
+    getAllUnits(),
   ]);
+
+  // Today's classes only. The full week is a page away; the board is for what
+  // is happening now.
+  const todaysClasses = week.classes.filter((entry) => entry.dayOfWeek === isoWeekday(today));
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
   const overdue = due.filter((item) => item.dueDate && dueUrgency(item.dueDate, today) === 'overdue');
   const ahead = due.filter((item) => item.dueDate && dueUrgency(item.dueDate, today) !== 'overdue');
@@ -49,12 +72,18 @@ export default async function BoardPage({ searchParams }: PageProps<'/'>) {
     standing: unitStanding(entry.summary, bands),
   }));
 
+    // GPA spans every semester, not just the current one. `withBands` above stays
+  // current-semester only because it drives the unit list under the cards.
+  const allStandings = allUnits.map((unit) =>
+    unitStanding(summariseUnit(unit.assessments), bands),
+  );
+
   const confirmedGpa = gradePointAverage(
-    withBands.filter((e) => e.standing.settled).map((e) => e.standing.percent),
+    allStandings.filter((s) => s.settled).map((s) => s.percent),
     bands,
   );
   const projectedGpa = gradePointAverage(
-    withBands.map((e) => e.standing.percent),
+    allStandings.map((s) => s.percent),
     bands,
   );
 
@@ -90,6 +119,24 @@ export default async function BoardPage({ searchParams }: PageProps<'/'>) {
           ))}
         </nav>
       </div>
+
+      {todaysClasses.length > 0 ? (
+        <section>
+          <BayLabel
+            trailing={
+              <Link
+                href="/timetable"
+                className="text-etch-dim underline decoration-rack-500 underline-offset-2 hover:text-etch hover:decoration-etch"
+              >
+                Whole week
+              </Link>
+            }
+          >
+            Today
+          </BayLabel>
+          <TodayClasses classes={todaysClasses} nowMinutes={nowMinutes} />
+        </section>
+      ) : null}
 
       {overdue.length > 0 ? (
         <section>

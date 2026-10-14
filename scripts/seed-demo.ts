@@ -10,7 +10,7 @@
  * scratch file instead of the real database.
  */
 import { db, ensureDatabaseReady } from '../lib/db/client';
-import { assessments, semesters, units } from '../db/schema';
+import { assessments, semesters, timetableEntries, units } from '../db/schema';
 import { addDaysIso, todayIso } from '../lib/dates';
 
 async function main(): Promise<void> {
@@ -199,9 +199,22 @@ async function main(): Promise<void> {
     },
   ]);
 
+  // Class times, so the week grid and the board's Today strip have something
+  // to show. Shaped like a real week here: teaching runs Sunday to Thursday,
+  // so these are ISO days 7, 1, 2, 3 and 4 — nothing on Friday or Saturday,
+  // which is the weekend in Qatar and the pair the grid hides when empty.
+  await db.insert(timetableEntries).values([
+    { unitId: digi.id, dayOfWeek: 7, startTime: '10:00', endTime: '12:00', type: 'lecture', location: 'Building 3, Room 14' },
+    { unitId: digi.id, dayOfWeek: 2, startTime: '14:00', endTime: '15:00', type: 'tutorial', location: 'Room B12' },
+    { unitId: stats.id, dayOfWeek: 1, startTime: '09:00', endTime: '11:00', type: 'lecture', location: 'Lecture Theatre 2' },
+    { unitId: stats.id, dayOfWeek: 3, startTime: '13:00', endTime: '15:00', type: 'lab', location: 'Computer Lab 4' },
+    { unitId: ethics.id, dayOfWeek: 1, startTime: '15:00', endTime: '17:00', type: 'workshop', location: 'Room A7' },
+    { unitId: ethics.id, dayOfWeek: 4, startTime: '11:00', endTime: '12:00', type: 'tutorial', location: 'Room A9' },
+  ]);
+
   console.log(
     `Seeded: ${semester.name}${past ? ` and ${past.name}` : ''}, ` +
-      '3 units, 11 assessments.',
+      '3 units, 11 assessments, 6 class times.',
   );
 }
 

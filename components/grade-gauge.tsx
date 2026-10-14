@@ -12,7 +12,6 @@ import {
   type UnitGradeSummary,
   type UnitStanding,
 } from '@/lib/grades';
-import { Figure } from '@/components/ui';
 
 /**
  * The gauge at the rack head: PRD.md §7 rendered as one instrument.

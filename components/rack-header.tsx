@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 
 const LINKS = [
   { href: '/', label: 'Board' },
+  { href: '/timetable', label: 'Timetable' },
   { href: '/semesters', label: 'Semesters' },
   { href: '/settings', label: 'Settings' },
 ] as const;
@@ -24,10 +25,18 @@ export function RackHeader() {
       <div className="mx-auto flex w-full max-w-6xl items-stretch gap-1 px-4 sm:px-6">
         <Link
           href="/"
-          className="flex items-center gap-2.5 py-3 pr-6 text-etch transition-colors hover:text-lamp-live"
+          className="flex shrink-0 items-center gap-2.5 py-3 pr-3 text-etch transition-colors hover:text-lamp-live sm:pr-6"
         >
           <RackMark />
-          <span className="text-[0.9375rem] font-semibold tracking-tight">Uni Manager</span>
+          {/*
+            The wordmark is the first thing to go when the rack head runs out of
+            width: four section plates plus the name overflow a 390px screen,
+            and a nav you cannot reach is worse than one without its name on it.
+            The mark still identifies the app.
+          */}
+          <span className="hidden text-[0.9375rem] font-semibold tracking-tight sm:inline">
+            Uni Manager
+          </span>
         </Link>
 
         <nav aria-label="Sections" className="flex items-stretch">
@@ -40,7 +49,7 @@ export function RackHeader() {
                 href={link.href}
                 aria-current={active ? 'page' : undefined}
                 className={[
-                  'relative flex items-center px-4 text-sm transition-colors',
+                  'relative flex items-center whitespace-nowrap px-2.5 text-sm transition-colors sm:px-4',
                   // The active section is a lit plate, not a coloured pill: the
                   // lamp hue is reserved for urgency and may not mean "selected".
                   active

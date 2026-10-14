@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, isNotNull, lte, ne, sql } from 'drizzle-orm';
 import { db, ensureDatabaseReady } from '@/lib/db';
 import {
   assessments,
@@ -189,6 +189,76 @@ export async function getUnitExtras(unitId: number): Promise<{
   return { timetable, sources };
 }
 
+/** A class, carrying enough of its unit to render without a second query. */
+export interface ScheduledClass extends TimetableEntry {
+  unitName: string;
+  unitCode: string | null;
+  unitColor: Unit['color'];
+}
+
+export interface WeekSchedule {
+  classes: ScheduledClass[];
+  /** Assessments falling inside this week. Dated, unlike the classes. */
+  due: DueAssessment[];
+}
+
+/**
+ * A specific week's classes and deadlines.
+ *
+ * The week has to be a real one rather than a generic Monday-to-Sunday, because
+ * classes repeat weekly but assessment deadlines are dated. Showing both in one
+ * grid — which is what makes the view worth having — only works if the grid
+ * knows which seven days it is displaying.
+ *
+ * Classes are returned for every unit in a non-archived semester: a timetable
+ * that quietly omitted a unit would be worse than no timetable.
+ */
+export async function getWeekSchedule(weekStart: string): Promise<WeekSchedule> {
+  await ensureDatabaseReady();
+
+  const weekEnd = addDaysIso(weekStart, 6);
+
+  const [classRows, dueRows] = await Promise.all([
+    db
+      .select({ entry: timetableEntries, unit: units, semester: semesters })
+      .from(timetableEntries)
+      .innerJoin(units, eq(timetableEntries.unitId, units.id))
+      .innerJoin(semesters, eq(units.semesterId, semesters.id))
+      .where(ne(semesters.status, 'past'))
+      .orderBy(asc(timetableEntries.dayOfWeek), asc(timetableEntries.startTime)),
+    db
+      .select({ assessment: assessments, unit: units, semester: semesters })
+      .from(assessments)
+      .innerJoin(units, eq(assessments.unitId, units.id))
+      .innerJoin(semesters, eq(units.semesterId, semesters.id))
+      .where(
+        and(
+          isNotNull(assessments.dueDate),
+          gte(assessments.dueDate, weekStart),
+          lte(assessments.dueDate, weekEnd),
+        ),
+      )
+      .orderBy(asc(assessments.dueDate)),
+  ]);
+
+  return {
+    classes: classRows.map((row) => ({
+      ...row.entry,
+      unitName: row.unit.name,
+      unitCode: row.unit.code,
+      unitColor: row.unit.color,
+    })),
+    due: dueRows.map((row) => ({
+      ...row.assessment,
+      unitId: row.unit.id,
+      unitName: row.unit.name,
+      unitCode: row.unit.code,
+      unitColor: row.unit.color,
+      semesterName: row.semester.name,
+    })),
+  };
+}
+
 export async function listGradeBands(): Promise<GradeBand[]> {
   await ensureDatabaseReady();
   return db.select().from(gradeBands).orderBy(asc(gradeBands.sortOrder));
@@ -210,5 +280,39 @@ export async function getCurrentSemesterUnits(): Promise<{
 
   if (!current) return { semester: null, units: [] };
   return { semester: current, units: await getSemesterUnits(current.id) };
+}
+
+// lib/queries.ts
+export interface UnitInSemester extends UnitWithAssessments {
+  semester: Semester;
+}
+
+export async function getAllUnits(): Promise<UnitInSemester[]> {
+  await ensureDatabaseReady();
+
+  const unitRows = await db
+    .select({ unit: units, semester: semesters })
+    .from(units)
+    .innerJoin(semesters, eq(units.semesterId, semesters.id));
+
+  if (unitRows.length === 0) return [];
+
+  const assessmentRows = await db
+    .select()
+    .from(assessments)
+    .orderBy(asc(assessments.sortOrder), asc(assessments.id));
+
+  const byUnit = new Map<number, Assessment[]>();
+  for (const row of assessmentRows) {
+    const list = byUnit.get(row.unitId);
+    if (list) list.push(row);
+    else byUnit.set(row.unitId, [row]);
+  }
+
+  return unitRows.map(({ unit, semester }) => ({
+    ...unit,
+    semester,
+    assessments: byUnit.get(unit.id) ?? [],
+  }));
 }
 

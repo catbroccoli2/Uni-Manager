@@ -1,6 +1,7 @@
 import { listGradeBands } from '@/lib/queries';
 import { resolveDatabasePath } from '@/lib/db/path';
 import { BayLabel } from '@/components/ui';
+import { ImportButton } from '@/components/import-button';
 import { BandEditor } from './band-editor';
 
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,7 @@ export default async function SettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 max-w-prose text-sm text-etch-dim">
-          Grade bands, GPA scale, and data export.
+          Grade bands, GPA scale, and data export and import.
         </p>
       </div>
 
@@ -56,6 +57,21 @@ export default async function SettingsPage() {
           >
             Export everything
           </a>
+        </div>
+      </section>
+
+      <section>
+        <BayLabel>Import</BayLabel>
+        <div className="flex flex-wrap items-center gap-4 border border-rack-600 bg-rack-700/40 px-4 py-4">
+          <div className="min-w-0 flex-1">
+            <p className="max-w-prose text-sm text-etch-dim">
+              Restores a file made by Export everything, for moving your data to another device.
+            </p>
+            <p className="mt-1 text-xs text-strip-warn">
+              This replaces everything currently in this app. Export first if you want a backup.
+            </p>
+          </div>
+          <ImportButton />
         </div>
       </section>
     </div>
